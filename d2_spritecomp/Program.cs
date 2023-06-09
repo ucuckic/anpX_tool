@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
@@ -336,8 +337,6 @@ namespace d2_spritecomp
 
                     for (int col = 0; col < 0x8; col++)
                     {
-                        //pals_l.Add(anp3_file.ReadBytes(0x20));
-                        //pals_r.Add(anp3_file.ReadBytes(0x20));
                         Console.WriteLine("off before: 0x{0:X}", anp3_file.BaseStream.Position);
 
                         byte[] pal_1_half_1 = anp3_file.ReadBytes(0x20);
@@ -474,8 +473,8 @@ namespace d2_spritecomp
                         {
                             Console.WriteLine("rotation and scale");
                             
-                            int x_rot_axis = anp3_file.ReadByte();
-                            int y_rot_axis = anp3_file.ReadByte();
+                            int x_rot_axis = anp3_file.ReadSByte();
+                            int y_rot_axis = anp3_file.ReadSByte();
                             int rot_angle = anp3_file.ReadInt16();
                             int scale_x = anp3_file.ReadInt16();
                             int scale_y = anp3_file.ReadInt16();
@@ -492,8 +491,8 @@ namespace d2_spritecomp
                         {
                             Console.WriteLine("rotation");
 
-                            int x_rot_axis = anp3_file.ReadByte();
-                            int y_rot_axis = anp3_file.ReadByte();
+                            int x_rot_axis = anp3_file.ReadSByte();
+                            int y_rot_axis = anp3_file.ReadSByte();
                             int rot_angle = anp3_file.ReadInt16();
                             //int scale_x = anp3_file.ReadInt16();
                             //int scale_y = anp3_file.ReadInt16();
@@ -673,7 +672,7 @@ namespace d2_spritecomp
                             
                             using (Image<Rgba32> part_image = Image.LoadPixelData<Rgba32>(chunk.pixel_data, chunk.len_x, chunk.len_y))
                             {
-                                part_image.SaveAsPng("debug/testimg_"+a+"_"+b+".png");
+                                //part_image.SaveAsPng("debug/testimg_"+a+"_"+b+".png");
 
                                 using (Image<Rgba32> copy_image = (Image<Rgba32>)part_image.Clone(c => c.Crop(new Rectangle(chunk.x, chunk.y, chunk.len_x, chunk.len_y))))
                                 {
@@ -684,8 +683,6 @@ namespace d2_spritecomp
 
                                         copy_image.Mutate(o => o.Resize((int)(copy_image.Width * mul_x), (int)(copy_image.Height * mul_y), KnownResamplers.NearestNeighbor));
                                     }
-
-
 
 
                                     copy_image.Mutate(o => o.Resize(copy_image.Width * 2, copy_image.Height * 2, KnownResamplers.NearestNeighbor));
@@ -702,10 +699,81 @@ namespace d2_spritecomp
 
                                     if ((chunk.flags & anp3_flag_enable_rotate) != 0)
                                     {
-                                        AffineTransformBuilder bld = new AffineTransformBuilder();
-                                        Vector2 origin = new Vector2(+(chunk.len_x / 2), (chunk.len_y / 2));
+                                        //degrees
+                                        float rot_angle = chunk.rot_angle / 11.33f;
+                                        //rot_angle = rot_angle * (3.14159265f / 180f);
 
-                                        copy_image.Mutate(o => o.Rotate((float)chunk.rot_angle / 11.33f, KnownResamplers.NearestNeighbor));
+                                        
+                                        Vector2 origin = new Vector2( (chunk.len_x / 2), (chunk.len_y / 2) );
+
+                                        //Console.WriteLine("pre w " + copy_image.Width + " h " + copy_image.Height);
+                                        copy_image.Mutate(o =>
+                                        {
+                                            
+                                            int o_width = copy_image.Width;
+                                            int o_height = copy_image.Height;
+
+                                            //give 256px offset lenience, signed byte, so +-128 potential
+                                            o.Pad(copy_image.Width+512,copy_image.Height+512);
+
+                                            int[] rect_param = new int[4];
+
+                                            int rot_axis_x = chunk.rot_axis_x * 4;
+                                            int rot_axis_y = chunk.rot_axis_y * 4;
+
+                                            if (rot_axis_x >= 0)
+                                            {
+                                                rect_param[0] = 0; //x position offset
+                                                rect_param[2] = rot_axis_x; //width offset
+                                            }
+                                            else if(rot_axis_x < 0)
+                                            {
+                                                rect_param[0] = rot_axis_x; //x position offset
+                                                rect_param[2] = Math.Abs(rot_axis_x); //width offset
+                                            }
+
+                                            if (rot_axis_y >= 0)
+                                            {
+                                                rect_param[1] = 0; //y position offset
+                                                rect_param[3] = rot_axis_y; //height offset
+                                            }
+                                            else if (rot_axis_y < 0)
+                                            {
+                                                rect_param[1] = rot_axis_y; //x position offset
+                                                rect_param[3] = Math.Abs(rot_axis_y); //height offset
+                                            }
+
+                                            Rectangle use_rect = new Rectangle(256 + rect_param[0], 256 + rect_param[1], o_width + rect_param[2], o_height + rect_param[3]);
+
+                                            Console.WriteLine(" padded size: "+copy_image.Width+" h "+copy_image.Height);
+                                            Console.WriteLine("offset value: x "+chunk.rot_axis_x+" y "+chunk.rot_axis_y);
+                                            Console.WriteLine(" crop rect dimensions: x "+use_rect.X+" y "+use_rect.Y+" uw "+use_rect.Width+" uh "+use_rect.Height);
+
+                                            o.Crop(use_rect);
+
+                                            copy_image.SaveAsPng("debug/testimg_crop_" + a + "_" + b + ".png");
+
+
+                                            AffineTransformBuilder bld = new AffineTransformBuilder();
+                                            bld.AppendRotationDegrees(rot_angle);
+                                            bld.AppendTranslation(new PointF(rot_axis_x, rot_axis_y));
+
+                                            o.Pad(image.Width, image.Height);
+
+                                            o.Transform(bld);
+
+                                            //float rot_angle = chunk.rot_angle / 11.33f;
+                                            //o.Rotate((float)chunk.rot_angle / 11.33f, KnownResamplers.NearestNeighbor);
+                                        });
+
+                                        //Console.WriteLine("post w " + copy_image.Width + " h " + copy_image.Height);
+
+                                        //System.Environment.Exit(0);
+
+
+                                        //copy_image.Mutate(o => o.Pad(chunk.len_x, chunk.len_y, Color.Blue));
+                                        //copy_image.Mutate(o => o.Crop( new Rectangle(0, 0, image.Width, image.Height) ) );
+                                        //copy_image.Mutate(o => o.Rotate((float)chunk.rot_angle / 11.33f, KnownResamplers.NearestNeighbor));
                                     }
 
                                     int x_offset = image.Width / 2;
