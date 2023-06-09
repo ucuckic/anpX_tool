@@ -657,6 +657,9 @@ namespace d2_spritecomp
                         //image.Mutate(o => o.Opacity(0));
                         foreach (i_dat chunk in idat_list)
                         {
+                            //oops?????
+                            if (chunk.len_x == 0 || chunk.len_y == 0) continue;
+
                             //if (chunk.len_x > in_sheet.Width) continue;
                             //if (chunk.len_y > in_sheet.Height) continue;
                             //if (chunk.x > in_sheet.Width) continue;
@@ -751,7 +754,7 @@ namespace d2_spritecomp
 
                                             o.Crop(use_rect);
 
-                                            copy_image.SaveAsPng("debug/testimg_crop_" + a + "_" + b + ".png");
+                                            //copy_image.SaveAsPng("debug/testimg_crop_" + a + "_" + b + ".png");
 
 
                                             AffineTransformBuilder bld = new AffineTransformBuilder();
