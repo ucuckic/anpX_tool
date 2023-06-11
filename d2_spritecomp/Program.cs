@@ -69,16 +69,34 @@ namespace d2_spritecomp
             public int chunk_center_y;
         }
 
+
+        public static bool c_pal = false;
+        public static string in_path;
+        public static string og_in_path;
+
+        public static DirectoryInfo texture_sheet_path;
+        public static DirectoryInfo in_dir;
+        public static DirectoryInfo out_dir = new DirectoryInfo("out\\");
+
         static void Main(string[] args)
         {
+
+            if (args.Length == 0)
+            {
+                Console.WriteLine("Usage Syntax: filename -texture anp2_texture.png -outdir out_dir");
+                return;
+            }
+
             List<i_dat> idat_list = new List<i_dat>();
 
             byte[] in_dat = File.ReadAllBytes(args[0]);
+
+            og_in_path = args[0];
+
             //Image in_sheet = Image.FromFile(args[1]);
             //Bitmap out_img = new Bitmap(256,256);
 
             //using var in_sheet = Image<Rgba32>.Load(args[1]);
-            string in_path;
 
             using ( MemoryStream chunk_dat_stream = new MemoryStream(in_dat) )
             {
@@ -90,11 +108,41 @@ namespace d2_spritecomp
                     //chunk_dat.BaseStream.Position = (0x4);
                     string anp_string = System.Text.Encoding.UTF8.GetString(chunk_dat.ReadBytes(4));
 
+                    for(int i = 0; i < args.Length; i++)
+                    {
+                        var c_arg = args[i];
+                        switch(c_arg)
+                        {
+                            case "-texture":
+                                if (i + 1 < args.Length)
+                                {
+                                    i++;
+                                    texture_sheet_path = new DirectoryInfo(args[i]);
+                                }
+                                break;
+                            case "-grayscale":
+                                c_pal = true;
+                                break;
+                            case "-outdir":
+                                if(i + 1 < args.Length)
+                                {
+                                    i++;
+                                    out_dir = new DirectoryInfo(args[i]);
+                                }
+                                break;
+                        }
+                    }
 
-                    switch(anp_string)
+                    in_dir = new DirectoryInfo(og_in_path);
+                    switch (anp_string)
                     {
                         case "anp2":
-                            in_path = args[1];
+                            if(texture_sheet_path == null)
+                            {
+                                Console.WriteLine("anp2 detected, but no texture sheet supplied. supply with: -texture");
+                                break;
+                            }
+                            in_path = texture_sheet_path.FullName;
                             anp2_unpack(chunk_dat,in_path);
                             break;
                         case "anp3":
@@ -105,11 +153,10 @@ namespace d2_spritecomp
                             break;
                         default:
                             Console.WriteLine("anp header missing");
-                            System.Environment.Exit(0);
+
+                            return;
                             break;
                     }
-
-
                 }
             }
         }
@@ -299,10 +346,13 @@ namespace d2_spritecomp
                         }
                     }
 
+                    string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+                    out_dir.Create();
+
                     //flippy endy
                     image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                    image.SaveAsPng("out/test_" + h + ".png");
-
+                    image.SaveAsPng(Path.Combine(out_dir.FullName, fname + "_f_" + h+ ".png"));
 
                 }
                 idat_list.Clear();
@@ -374,7 +424,7 @@ namespace d2_spritecomp
 
                     Console.WriteLine("fpr " + pals[l].Length);
 
-                    File.WriteAllBytes("outtestpal.bin",pals[l]);
+                    //File.WriteAllBytes("outtestpal.bin",pals[l]);
 
                     break;
                 }
@@ -679,8 +729,8 @@ namespace d2_spritecomp
                             //if (chunk.x + chunk.len_x > in_sheet.Height) continue;
 
                             Console.WriteLine("using palette: "+chunk.use_palette+" sz: x "+chunk.len_x+" y "+chunk.len_y+" file_len "+chunk.pixel_data.Length);
-                            File.WriteAllBytes("palette_data.bin", pals[0]);
-                            File.WriteAllBytes("pixel_data.bin",chunk.pixel_data);
+                            //File.WriteAllBytes("palette_data.bin", pals[0]);
+                            //File.WriteAllBytes("pixel_data.bin",chunk.pixel_data);
 
                             byte[] test = new byte[] { 50, 50, 50, 255 };
                             
@@ -802,10 +852,13 @@ namespace d2_spritecomp
 
                         }
 
+                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+                        out_dir.Create();
+
                         //flippy endy
                         image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                        image.SaveAsPng("out/fr_" + a + "_prt_"+b+".png");
-
+                        image.SaveAsPng( Path.Combine(out_dir.FullName, fname + "_f_" + a + "_p_" + b + ".png"));
 
                     }
                     idat_list.Clear();
@@ -1002,11 +1055,29 @@ namespace d2_spritecomp
                     //colored_pixel_data[(f * 4) + 3] = 0xff;
 
                     int use_pal = ( sprite_part.use_palette >= 0x20 ) ? 1 : 0;
+                    if (use_pal == 1 && c_pal) pixel_value += 64;
 
-                    colored_pixel_data[(f * 4) + 0] = pals[use_pal][(pixel_value * 4) + 0];
-                    colored_pixel_data[(f * 4) + 1] = pals[use_pal][(pixel_value * 4) + 1];
-                    colored_pixel_data[(f * 4) + 2] = pals[use_pal][(pixel_value * 4) + 2];
-                    colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                    if (c_pal && use_pal == 1)
+                    {
+                        //Console.WriteLine(pixel_value);
+                        //System.Environment.Exit(0);
+                    }
+                    
+                    if(c_pal)
+                    {
+                        colored_pixel_data[(f * 4) + 0] = (byte)pixel_value;
+                        colored_pixel_data[(f * 4) + 1] = (byte)pixel_value;
+                        colored_pixel_data[(f * 4) + 2] = (byte)pixel_value;
+                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                    }
+                    else
+                    {
+                        colored_pixel_data[(f * 4) + 0] = pals[use_pal][(pixel_value * 4) + 0];
+                        colored_pixel_data[(f * 4) + 1] = pals[use_pal][(pixel_value * 4) + 1];
+                        colored_pixel_data[(f * 4) + 2] = pals[use_pal][(pixel_value * 4) + 2];
+                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                    }
+
 
                     if (pixel_value == 0)
                     {
@@ -1019,6 +1090,7 @@ namespace d2_spritecomp
                         int use_al = (colored_pixel_data[(f * 4) + 3] * 2 > 255) ? 255 : colored_pixel_data[(f * 4) + 3];
 
                         colored_pixel_data[(f * 4) + 3] = (byte)use_al;
+                        
                     }
                 }
 
@@ -1072,10 +1144,12 @@ namespace d2_spritecomp
 
             for (int nm = 0, f = 0; nm < sprite_parts_list.Count; nm++)
             {
-                var info = new SKImageInfo(512, 512);
+                var info = new SKImageInfo(1024, 768);
                 using (var surface = SKSurface.Create(info))
                 {
                     SKCanvas canvas = surface.Canvas;
+                    if (c_pal) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+
                     for (int g = 0; g < sprite_parts_list[nm]; g++, f++)
                     {
                         uint num_to_process = sprite_parts_list[nm];
@@ -1124,14 +1198,16 @@ namespace d2_spritecomp
 
 
                         int off_x = info.Width / 2;
-                        int off_y = (info.Height / 2)+224;
+                        int off_y = (info.Height / 2+128);
 
                         canvas.Save();
+
+                        canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
                         int t_x = off_x;
                         int t_y = off_y;
 
-                        Point canvas_trans = new Point((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
+                        Point canvas_trans = new Point((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
                         //canvas.Translate(canvas_trans.X, canvas_trans.Y);
 
                         float use_scl_x = ( (chunk.flags & V103_flag_flip_x) != 0 )? -1 : 1;
@@ -1153,6 +1229,9 @@ namespace d2_spritecomp
                         canvas.DrawBitmap(part_image,new SKPoint(canvas_trans.X, canvas_trans.Y));
                         //canvas.DrawBitmap(part_image, new SKPoint(0, 0));
 
+                        //flips
+                        Console.WriteLine("WHYYYYYY");
+
                         canvas.Restore();
 
                         Console.WriteLine("part "+g+" sprite "+nm);
@@ -1160,9 +1239,18 @@ namespace d2_spritecomp
 
                     Console.WriteLine("begin save "+nm);
 
+                    canvas.Save();
+
+                    DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+                    DirectoryInfo out_dir = new DirectoryInfo("out\\");
+
+                    out_dir.Create();
+
+                    string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
                     using (var image = surface.Snapshot())
                     using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
-                    using (var stream = File.OpenWrite("out/"+"fr_"+nm+"test.png"))
+                    using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_"+nm+".png")))
                     {
                         // save the data to a stream
                         data.SaveTo(stream);
