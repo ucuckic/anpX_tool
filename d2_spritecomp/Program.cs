@@ -456,6 +456,7 @@ namespace d2_spritecomp
 
             }
 
+            uint[] anim_offs = new uint[num_animations];
 
             for (int a = 0; a < num_animations; a++)
             {
@@ -474,6 +475,21 @@ namespace d2_spritecomp
                 Console.WriteLine("confirmed "+c_ani_frame_count+" frames");
 
                 uint c_ani_type = anp3_file.ReadByte();
+
+                //redundancy checking
+                bool skip = false;
+                for (int ani_c = 0; ani_c < anim_offs.Length; ani_c++)
+                {
+                    if( anim_offs[ani_c] == c_ani_offset )
+                    {
+                        Console.WriteLine("prexist: 0x{0:X}", c_ani_offset);
+                        skip = true;
+                        break;
+                    }
+                }
+
+                if (skip) continue;
+                anim_offs[a] = c_ani_offset;
 
                 //unk
                 anp3_file.BaseStream.Position += 2;
@@ -858,7 +874,7 @@ namespace d2_spritecomp
 
                         //flippy endy
                         image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                        image.SaveAsPng( Path.Combine(out_dir.FullName, fname + "_f_" + a + "_p_" + b + ".png"));
+                        image.SaveAsPng( Path.Combine(out_dir.FullName, fname + "_a_" + a + "_f_" + b +"_d_"+frame_duration+".png"));
 
                     }
                     idat_list.Clear();
