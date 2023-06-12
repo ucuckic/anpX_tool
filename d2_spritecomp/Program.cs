@@ -1202,21 +1202,34 @@ namespace d2_spritecomp
 
                         canvas.Save();
 
+                        float prt_scl_x = (chunk.scale_x / 10f);
+                        float prt_scl_y = (chunk.scale_y / 10f);
+
                         canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+
+                        
 
                         int t_x = off_x;
                         int t_y = off_y;
 
-                        Point canvas_trans = new Point((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
+                        //SKPoint canvas_trans = new SKPoint( (( (chunk.paste_x * prt_scl_x) - ( (cut_width * prt_scl_x) / 2) )) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
+                        SKPoint canvas_trans = new SKPoint( ( chunk.paste_x - (cut_width/2) ) + off_x, ( chunk.paste_y - (cut_height/2) ) + off_y );
+
+                        canvas.RotateDegrees(chunk.rot_angle, t_x + chunk.rot_axis_x, t_y - chunk.rot_axis_y);
+                        canvas.Scale(prt_scl_x, prt_scl_y, t_x + chunk.chunk_center_x, t_y - chunk.chunk_center_y);
+
+                        //if (prt_scl_x != 1) canvas.Scale(prt_scl_x, prt_scl_y);
+
                         //canvas.Translate(canvas_trans.X, canvas_trans.Y);
 
                         float use_scl_x = ( (chunk.flags & V103_flag_flip_x) != 0 )? -1 : 1;
                         float use_scl_y = ( (chunk.flags & V103_flag_flip_y) != 0) ? -1 : 1;
 
-                        int use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (chunk.paste_x + (cut_width / 2)) + off_x : canvas_trans.X;
-                        int use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (chunk.paste_y + (cut_height / 2)) + off_y : canvas_trans.Y;
+                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (chunk.paste_x + (cut_width /  2) ) + off_x : canvas_trans.X;
+                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (chunk.paste_y + (cut_height / 2) ) + off_y : canvas_trans.Y;
 
-                        canvas.RotateDegrees(chunk.rot_angle,t_x+chunk.rot_axis_x,t_y-chunk.rot_axis_y);
+
+                        
 
                         if ( (chunk.flags & V103_flag_flip_x | V103_flag_flip_y) !=0 )
                         {
@@ -1225,13 +1238,8 @@ namespace d2_spritecomp
                             //canvas_trans.X *= -1;
                         }
 
-
                         canvas.DrawBitmap(part_image,new SKPoint(canvas_trans.X, canvas_trans.Y));
                         //canvas.DrawBitmap(part_image, new SKPoint(0, 0));
-
-                        //flips
-                        Console.WriteLine("WHYYYYYY");
-
                         canvas.Restore();
 
                         Console.WriteLine("part "+g+" sprite "+nm);
@@ -1242,7 +1250,6 @@ namespace d2_spritecomp
                     canvas.Save();
 
                     DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
-                    DirectoryInfo out_dir = new DirectoryInfo("out\\");
 
                     out_dir.Create();
 
