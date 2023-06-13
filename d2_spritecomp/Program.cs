@@ -5,6 +5,7 @@ using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
@@ -70,13 +71,16 @@ namespace d2_spritecomp
         }
 
 
+        public static bool save_parts = false;
         public static bool c_pal = false;
+
         public static string in_path;
         public static string og_in_path;
 
         public static DirectoryInfo texture_sheet_path;
         public static DirectoryInfo in_dir;
         public static DirectoryInfo out_dir = new DirectoryInfo("out\\");
+        public static DirectoryInfo part_out_dir = new DirectoryInfo(Path.Combine(out_dir.FullName, @"parts"));
 
         static void Main(string[] args)
         {
@@ -130,6 +134,9 @@ namespace d2_spritecomp
                                     out_dir = new DirectoryInfo(args[i]);
                                 }
                                 break;
+                            case "-saveparts":
+                                save_parts = true;
+                                break;
                         }
                     }
 
@@ -153,9 +160,7 @@ namespace d2_spritecomp
                             break;
                         default:
                             Console.WriteLine("anp header missing");
-
                             return;
-                            break;
                     }
                 }
             }
@@ -307,9 +312,14 @@ namespace d2_spritecomp
 
                 using (Image<Rgba32> image = new(512, 512))
                 {
+                    string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
                     //image.Mutate(o => o.Opacity(0));
-                    foreach (i_dat chunk in idat_list)
+                    //foreach (i_dat chunk in idat_list)
+                    for(int ch = 0; ch < idat_list.Count(); ch++)
                     {
+                        i_dat chunk = idat_list[ch];
+
+
                         if (chunk.len_x > in_sheet.Width) continue;
                         if (chunk.len_y > in_sheet.Height) continue;
                         if (chunk.x > in_sheet.Width) continue;
@@ -321,6 +331,13 @@ namespace d2_spritecomp
 
                         using (Image<Rgba32> copy_image = (Image<Rgba32>)in_sheet.Clone(c => c.Crop(new Rectangle(chunk.x, chunk.y, chunk.len_x, chunk.len_y))))
                         {
+                            if (save_parts)
+                            {
+                                part_out_dir.Create();
+
+                                copy_image.SaveAsPng(Path.Combine(part_out_dir.FullName, fname + "_a_" + h + "_" + ch + ".png"));
+                            }
+
                             copy_image.Mutate(o => o.Resize(copy_image.Width * 2, copy_image.Height * 2, KnownResamplers.NearestNeighbor));
 
                             if ((chunk.flags & _flag_flip_x) != 0)
@@ -346,13 +363,11 @@ namespace d2_spritecomp
                         }
                     }
 
-                    string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
-
                     out_dir.Create();
 
                     //flippy endy
                     image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                    image.SaveAsPng(Path.Combine(out_dir.FullName, fname + "_f_" + h+ ".png"));
+                    image.SaveAsPng(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png"));
 
                 }
                 idat_list.Clear();
@@ -730,6 +745,8 @@ namespace d2_spritecomp
 
                     using (Image<Rgba32> image = new(1024, 768))
                     {
+                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
                         idat_list.Reverse();
                         //image.Mutate(o => o.Opacity(0));
                         foreach (i_dat chunk in idat_list)
@@ -753,6 +770,13 @@ namespace d2_spritecomp
                             using (Image<Rgba32> part_image = Image.LoadPixelData<Rgba32>(chunk.pixel_data, chunk.len_x, chunk.len_y))
                             {
                                 //part_image.SaveAsPng("debug/testimg_"+a+"_"+b+".png");
+
+                                if(save_parts)
+                                {
+                                    part_out_dir.Create();
+
+                                    part_image.SaveAsPng(Path.Combine(part_out_dir.FullName, fname + "_a_" + a + "_" + b + ".png"));
+                                }
 
                                 using (Image<Rgba32> copy_image = (Image<Rgba32>)part_image.Clone(c => c.Crop(new Rectangle(chunk.x, chunk.y, chunk.len_x, chunk.len_y))))
                                 {
@@ -867,8 +891,6 @@ namespace d2_spritecomp
 
 
                         }
-
-                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
                         out_dir.Create();
 
@@ -1160,6 +1182,7 @@ namespace d2_spritecomp
 
             for (int nm = 0, f = 0; nm < sprite_parts_list.Count; nm++)
             {
+                List<SKBitmap> bitmp_list = new List<SKBitmap>();
                 var info = new SKImageInfo(1024, 768);
                 using (var surface = SKSurface.Create(info))
                 {
@@ -1211,6 +1234,11 @@ namespace d2_spritecomp
 
                         SKBitmap part_image_canvas = new SKBitmap(info.Width, info.Height);
                         SKCanvas part_canvas = new SKCanvas(part_image_canvas);
+
+                        if( save_parts )
+                        {
+                            bitmp_list.Add(part_image);
+                        }
 
 
                         int off_x = info.Width / 2;
@@ -1278,6 +1306,23 @@ namespace d2_spritecomp
                         // save the data to a stream
                         data.SaveTo(stream);
                     }
+
+                    if(save_parts)
+                    {
+                        part_out_dir.Create();
+
+                        for (int l = 0; l < bitmp_list.Count; l++)
+                        {
+                            Console.WriteLine("svpart " + f);
+                            using (var data = bitmp_list[l].Encode(SKEncodedImageFormat.Png, 100))
+                            using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_a_"+nm+"_"+ l + ".png")))
+                            {
+                                // save the data to a stream
+                                data.SaveTo(stream);
+                            }
+                        }
+                    }
+
 
 
                     //System.Environment.Exit(0);
