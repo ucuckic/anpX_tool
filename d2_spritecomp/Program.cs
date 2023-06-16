@@ -44,8 +44,15 @@ namespace d2_spritecomp
         const int anp3_flag_enable_opacity = 0x10;
 
         //V103
+        const int V103_flag_blendmode_add = 0x1;
+        const int V103_flag_blendmode_sub = 0x2;
+
+        const int V103_flag_double_y_offset = 0x4;
+        const int V103_flag_double_x_offset = 0x8;
         const int V103_flag_flip_y = 0x10;
+        const int V103_flag_quadruple_y_offset = 0x20;
         const int V103_flag_flip_x = 0x40;
+        const int V103_flag_quadruple_x_offset = 0x80;
 
         //V154
 
@@ -1264,13 +1271,56 @@ namespace d2_spritecomp
 
                         canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
-                        
+
+                        SKPaint part_paint = new SKPaint();
+
+                        //destructive to grayscale palettization
+                        if(!c_pal)
+                        {
+                            if ((chunk.flags & V103_flag_blendmode_add) != 0)
+                            {
+                                part_paint.BlendMode = SKBlendMode.Plus;
+                            }
+                            else if ((chunk.flags & V103_flag_blendmode_sub) != 0)
+                            {
+                                part_paint.BlendMode = SKBlendMode.DstATop;
+                            }
+                        }
+
 
                         int t_x = off_x;
                         int t_y = off_y;
 
+                        int paste_x_multi = 1;
+                        int paste_y_multi = 1;
+
+                        //x multi flags
+                        if ( (chunk.flags & V103_flag_quadruple_x_offset)!=0 )
+                        {
+                            paste_x_multi = 4;
+                        }
+                        else
+                        if ((chunk.flags & V103_flag_double_x_offset) != 0)
+                        {
+                            paste_x_multi = 2;
+                        }
+
+                        //y multi flags
+                        if ( (chunk.flags & V103_flag_quadruple_y_offset)!=0 )
+                        {
+                            paste_y_multi = 4;
+                        }
+                        else
+                        if ((chunk.flags & V103_flag_double_y_offset) != 0)
+                        {
+                            paste_y_multi = 2;
+                        }
+
+                        int paste_x = chunk.paste_x * paste_x_multi;
+                        int paste_y = chunk.paste_y * paste_y_multi;
+
                         //SKPoint canvas_trans = new SKPoint( (( (chunk.paste_x * prt_scl_x) - ( (cut_width * prt_scl_x) / 2) )) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
-                        SKPoint canvas_trans = new SKPoint( ( chunk.paste_x - (cut_width/2) ) + off_x, ( chunk.paste_y - (cut_height/2) ) + off_y );
+                        SKPoint canvas_trans = new SKPoint( ( paste_x - (cut_width/2) ) + off_x, ( paste_y - (cut_height/2) ) + off_y );
 
                         canvas.RotateDegrees(chunk.rot_angle, t_x + chunk.rot_axis_x, t_y - chunk.rot_axis_y);
                         canvas.Scale(prt_scl_x, prt_scl_y, t_x + chunk.chunk_center_x, t_y - chunk.chunk_center_y);
@@ -1282,8 +1332,8 @@ namespace d2_spritecomp
                         float use_scl_x = ( (chunk.flags & V103_flag_flip_x) != 0 )? -1 : 1;
                         float use_scl_y = ( (chunk.flags & V103_flag_flip_y) != 0) ? -1 : 1;
 
-                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (chunk.paste_x + (cut_width /  2) ) + off_x : canvas_trans.X;
-                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (chunk.paste_y + (cut_height / 2) ) + off_y : canvas_trans.Y;
+                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (paste_x + (cut_width /  2) ) + off_x : canvas_trans.X;
+                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (paste_y + (cut_height / 2) ) + off_y : canvas_trans.Y;
 
 
                         
@@ -1295,7 +1345,7 @@ namespace d2_spritecomp
                             //canvas_trans.X *= -1;
                         }
 
-                        canvas.DrawBitmap(part_image,new SKPoint(canvas_trans.X, canvas_trans.Y));
+                        canvas.DrawBitmap(part_image,new SKPoint(canvas_trans.X, canvas_trans.Y),part_paint);
                         //canvas.DrawBitmap(part_image, new SKPoint(0, 0));
                         canvas.Restore();
 
@@ -1884,7 +1934,6 @@ namespace d2_spritecomp
                             bitmp_list.Add(part_image);
                         }
 
-
                         int off_x = info.Width / 2;
                         int off_y = (info.Height / 2 + 128);
 
@@ -1896,12 +1945,53 @@ namespace d2_spritecomp
                         canvas.Scale(2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
 
+                        SKPaint part_paint = new SKPaint();
+                        //destructive to grayscale palettization
+                        if (!c_pal)
+                        {
+                            if ((chunk.flags & V103_flag_blendmode_add) != 0)
+                            {
+                                part_paint.BlendMode = SKBlendMode.Plus;
+                            }
+                            else if ((chunk.flags & V103_flag_blendmode_sub) != 0)
+                            {
+                                part_paint.BlendMode = SKBlendMode.DstATop;
+                            }
+                        }
 
                         int t_x = off_x;
                         int t_y = off_y;
 
+                        int paste_x_multi = 1;
+                        int paste_y_multi = 1;
+
+                        //x multi flags
+                        if ((chunk.flags & V103_flag_quadruple_x_offset) != 0)
+                        {
+                            paste_x_multi = 4;
+                        }
+                        else
+                        if ((chunk.flags & V103_flag_double_x_offset) != 0)
+                        {
+                            paste_x_multi = 2;
+                        }
+
+                        //y multi flags
+                        if ((chunk.flags & V103_flag_quadruple_y_offset) != 0)
+                        {
+                            paste_y_multi = 4;
+                        }
+                        else
+                        if ((chunk.flags & V103_flag_double_y_offset) != 0)
+                        {
+                            paste_y_multi = 2;
+                        }
+
+                        int paste_x = chunk.paste_x * paste_x_multi;
+                        int paste_y = chunk.paste_y * paste_y_multi;
+
                         //SKPoint canvas_trans = new SKPoint( (( (chunk.paste_x * prt_scl_x) - ( (cut_width * prt_scl_x) / 2) )) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
-                        SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
+                        SKPoint canvas_trans = new SKPoint((paste_x - (cut_width / 2)) + off_x, (paste_y - (cut_height / 2)) + off_y);
 
                         canvas.RotateDegrees(chunk.rot_angle, t_x + chunk.rot_axis_x, t_y - chunk.rot_axis_y);
                         canvas.Scale(prt_scl_x, prt_scl_y, t_x + chunk.chunk_center_x, t_y - chunk.chunk_center_y);
@@ -1913,8 +2003,8 @@ namespace d2_spritecomp
                         float use_scl_x = ((chunk.flags & V103_flag_flip_x) != 0) ? -1 : 1;
                         float use_scl_y = ((chunk.flags & V103_flag_flip_y) != 0) ? -1 : 1;
 
-                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (chunk.paste_x + (cut_width / 2)) + off_x : canvas_trans.X;
-                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (chunk.paste_y + (cut_height / 2)) + off_y : canvas_trans.Y;
+                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (paste_x + (cut_width / 2)) + off_x : canvas_trans.X;
+                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (paste_y + (cut_height / 2)) + off_y : canvas_trans.Y;
 
 
                         if ((chunk.flags & V103_flag_flip_x | V103_flag_flip_y) != 0)
@@ -1924,7 +2014,7 @@ namespace d2_spritecomp
                             //canvas_trans.X *= -1;
                         }
 
-                        canvas.DrawBitmap(part_image, new SKPoint(canvas_trans.X, canvas_trans.Y));
+                        canvas.DrawBitmap(part_image, new SKPoint(canvas_trans.X, canvas_trans.Y), part_paint);
                         //canvas.DrawBitmap(part_image, new SKPoint(0, 0));
                         canvas.Restore();
 
