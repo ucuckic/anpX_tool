@@ -87,9 +87,13 @@ namespace d2_spritecomp
             public uint image_data_offset;
         }
 
+        public static bool exclude_char = false;
+        public static bool exclude_wep = false;
 
         public static bool save_parts = false;
         public static bool c_pal = false;
+
+        public static int ndx_equip = 0;
 
         public static string in_path;
         public static string og_in_path;
@@ -98,6 +102,7 @@ namespace d2_spritecomp
         public static DirectoryInfo in_dir;
         public static DirectoryInfo out_dir = new DirectoryInfo("out\\");
         public static DirectoryInfo part_out_dir = new DirectoryInfo(Path.Combine(out_dir.FullName, @"parts"));
+        public static DirectoryInfo palettes_out_dir = new DirectoryInfo(Path.Combine(out_dir.FullName, @"palettes"));
 
         static void Main(string[] args)
         {
@@ -134,6 +139,20 @@ namespace d2_spritecomp
                         var c_arg = args[i];
                         switch(c_arg)
                         {
+                            case "-nochar":
+                                exclude_char = true;
+                                break;
+                            case "-nowep":
+                                exclude_wep = true;
+                                break;
+                            case "-equip":
+                                if (i + 1 < args.Length)
+                                {
+                                    i++;
+
+                                    int.TryParse(args[i], out ndx_equip);
+                                }
+                                break;
                             case "-texture":
                                 if (i + 1 < args.Length)
                                 {
@@ -936,16 +955,17 @@ namespace d2_spritecomp
         {
             List<i_dat> idat_list = new List<i_dat>();
 
-            uint unk1 = file.ReadUInt32(); //pal related 0x4
+            uint char_pal_size = file.ReadUInt32(); //pal related 0x4 (size of player palette block)
             uint pal_offset = file.ReadUInt32(); //0x8
-            uint unk2 = file.ReadUInt32(); //0xC
+            uint weapon_pal_size = file.ReadUInt32(); //0xC weapon pal size
             uint weapon_pal_offset = file.ReadUInt32(); //0x10
             //uint unk4 = file.ReadUInt32(); //0x14
 
             uint tex_length_1 = file.ReadUInt32(); //0x14
             uint tex_offset_1 = file.ReadUInt32(); //0x18
 
-            uint unk4 = file.ReadUInt32(); //0x1C
+            //the offset to the equipped weapon from the texture sheet beginning
+            uint equipped_weapon_size = file.ReadUInt32(); //0x1C
 
             uint tex_offset_2 = file.ReadUInt32(); //only if applicable? 0x20
 
@@ -965,13 +985,48 @@ namespace d2_spritecomp
 
             uint unk9 = file.ReadUInt32();
 
+            uint num_pals_char = char_pal_size / 0x40;
+            uint num_pals_weapon = weapon_pal_size / 0x40;
 
-            byte[][] pals = new byte[2][];
+            byte[][] pals = new byte[num_pals_char][];
+
+            List<byte[][]> weapon_pals_list = new List<byte[][]>();
+
             file.BaseStream.Position = pal_offset;
-            pals[0] = file.ReadBytes(0x400);
+            for (int i = 0; i < num_pals_char; i++)
+            {
+                pals[i] = file.ReadBytes(0x40);
+            }
 
             file.BaseStream.Position = weapon_pal_offset;
-            pals[1] = file.ReadBytes(0x400);
+
+            //keep slurping until you reach the end of the color data, accomodate all potential equipped weapon palette selections
+            while(file.BaseStream.Position != chunk_tbl_offset)
+            {
+                Console.WriteLine("slurping "+ file.BaseStream.Position+" npl "+num_pals_weapon);
+                if(file.BaseStream.Position > chunk_tbl_offset)
+                {
+                    Console.WriteLine("the fuck " + file.BaseStream.Position);
+                    System.Environment.Exit(0);
+
+                }
+
+                byte[][] weapon_pals = new byte[num_pals_weapon][];
+                for (int i = 0; i < num_pals_weapon; i++)
+                {
+                    weapon_pals[i] = file.ReadBytes(0x40);
+                }
+
+                weapon_pals_list.Add(weapon_pals);
+            }
+
+            if(c_pal)
+            {
+                palettes_out_dir.Create();
+                File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_weapon_pal_"+ndx_equip+".bin"), weapon_pals_list[ndx_equip].SelectMany(x => x).ToArray());
+                File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal_" + ndx_equip + ".bin"), pals.SelectMany(x => x).ToArray());
+            }
+            
 
 
             List<uint> sprite_parts_list = new List<uint>();
@@ -1055,12 +1110,9 @@ namespace d2_spritecomp
                 sprite_part.len_y = (int)tile_height;
 
                 //Console.WriteLine("read: 0x{0:X}", file.BaseStream.Position);
- 
-                int cut_width = 32*sprite_part.len_x;
-                int cut_height = 8;
 
-                for (int j = 0; j < sprite_part.len_y; j++) cut_height *= 2;
-                //for (int j = 0; j < sprite_part.len_x; j++) cut_width +=32;
+                int cut_width = (32 * sprite_part.len_x);
+                int cut_height = (8 << sprite_part.len_y);
 
                 byte[] pixel_data = new byte[cut_width * cut_height];
 
@@ -1075,7 +1127,7 @@ namespace d2_spritecomp
                 }
                 else
                 {
-                    file.BaseStream.Position = tex_offset_2 + (sprite_part.y * 32);
+                    file.BaseStream.Position = (tex_offset_2 + (equipped_weapon_size * ndx_equip)) + (sprite_part.y * 32);
                 }
                 
 
@@ -1086,8 +1138,12 @@ namespace d2_spritecomp
                     uint pixel_1 = ((raw_byte & 0xF0) >> 4);
                     uint pixel_2 = (raw_byte & 0x0F);
 
-                    pixel_1 += (uint)sprite_part.use_palette * 0x10;
-                    pixel_2 += (uint)sprite_part.use_palette * 0x10;
+                    if(c_pal)
+                    {
+                        pixel_1 += (uint)(sprite_part.use_palette & 0x0F) * 0x10;
+                        pixel_2 += (uint)(sprite_part.use_palette & 0x0F) * 0x10;
+                    }
+
 
                     pixel_data[f + 1] = (byte)pixel_1;
                     pixel_data[f] = (byte)pixel_2;
@@ -1104,36 +1160,29 @@ namespace d2_spritecomp
                     if (sprite_part.len_y > 6) break;
                     int pixel_value = pixel_data[f];
 
-                    //Console.WriteLine("pixel value "+pixel_value+" chunk pal "+sprite_part.use_palette);
-                    //Console.WriteLine("target cpal addr " + ((pixel_value * 4) + 0));
+                    byte[][] pal_array = ( sprite_part.use_palette >= 0x20 ) ? weapon_pals_list[ndx_equip] : pals;
+                    int use_pal = (ndx_equip > 0 && sprite_part.use_palette >= 0x20) ? (sprite_part.use_palette & 0x0F) : (sprite_part.use_palette & 0x0F);
 
-                    //olored_pixel_data[(f * 4) + 0] = (byte)pixel_value;
-                    //colored_pixel_data[(f * 4) + 1] = (byte)pixel_value;
-                    //colored_pixel_data[(f * 4) + 2] = (byte)pixel_value;
-                    //colored_pixel_data[(f * 4) + 3] = 0xff;
+                    //if (use_pal == 1 && c_pal) pixel_value += 64;
 
-                    int use_pal = ( sprite_part.use_palette >= 0x20 ) ? 1 : 0;
-                    if (use_pal == 1 && c_pal) pixel_value += 64;
 
-                    if (c_pal && use_pal == 1)
+                    int pxval_offset = (sprite_part.use_palette & 0x0F) * 0x10;
+
+                    if (c_pal)
                     {
-                        //Console.WriteLine(pixel_value);
-                        //System.Environment.Exit(0);
-                    }
-                    
-                    if(c_pal)
-                    {
+                        int alpha = ( pal_array[use_pal][ ( (pixel_value - pxval_offset) * 4) + 3] == 0 )? 0 : 0xff;
+
                         colored_pixel_data[(f * 4) + 0] = (byte)pixel_value;
                         colored_pixel_data[(f * 4) + 1] = (byte)pixel_value;
                         colored_pixel_data[(f * 4) + 2] = (byte)pixel_value;
-                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                        colored_pixel_data[(f * 4) + 3] = (byte)alpha;
                     }
                     else
                     {
-                        colored_pixel_data[(f * 4) + 0] = pals[use_pal][(pixel_value * 4) + 0];
-                        colored_pixel_data[(f * 4) + 1] = pals[use_pal][(pixel_value * 4) + 1];
-                        colored_pixel_data[(f * 4) + 2] = pals[use_pal][(pixel_value * 4) + 2];
-                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                        colored_pixel_data[(f * 4) + 0] = pal_array[use_pal][(pixel_value * 4) + 0];
+                        colored_pixel_data[(f * 4) + 1] = pal_array[use_pal][(pixel_value * 4) + 1];
+                        colored_pixel_data[(f * 4) + 2] = pal_array[use_pal][(pixel_value * 4) + 2];
+                        colored_pixel_data[(f * 4) + 3] = pal_array[use_pal][(pixel_value * 4) + 3];
                     }
 
 
@@ -1216,6 +1265,8 @@ namespace d2_spritecomp
 
                         //oops?????
                         if (chunk.len_x == 0 ) continue;
+                        if (chunk.use_palette < 0x20 && exclude_char) continue;
+                        if (chunk.use_palette >= 0x20 && exclude_wep) continue;
 
                         Console.WriteLine("using palette: " + chunk.use_palette + " sz: x " + chunk.len_x + " y " + chunk.len_y + " file_len " + chunk.pixel_data.Length);
                         //File.WriteAllBytes("palette_data.bin", pals[0]);
@@ -1223,13 +1274,8 @@ namespace d2_spritecomp
 
                         int true_y = (chunk.pixel_data.Length / 4) / 32;
 
-                        int cut_width = 32*chunk.len_x;
-                        int cut_height = 8;
-
-                        for (int c = 0; c < chunk.len_y; c++) cut_height *= 2;
-                        //for (int j = 0; j < chunk.len_x; j++) cut_width += 32;
-
-                        //if (chunk.len_y > 6) continue;
+                        int cut_width = (32 * chunk.len_x);
+                        int cut_height = (8 << chunk.len_y);
 
                         Console.WriteLine("len " + chunk.len_y + " ch " + cut_height);
 
@@ -1285,6 +1331,12 @@ namespace d2_spritecomp
                             {
                                 part_paint.BlendMode = SKBlendMode.DstATop;
                             }
+                        }
+                        else
+                        {
+                            if((chunk.flags & V103_flag_blendmode_add) != 0 || (chunk.flags & V103_flag_blendmode_sub) != 0) continue;
+                            //export these individually later
+
                         }
 
 
@@ -1403,6 +1455,7 @@ namespace d2_spritecomp
             //System.Environment.Exit(0);
         }
 
+        
 
         static void V154_unpack(BinaryReader file)
         {
@@ -1456,7 +1509,7 @@ namespace d2_spritecomp
                 npl[c + 2] = (byte)(((col >> 10) & 0x1f) * 8);
                 npl[c + 3] = 0xff;
 
-                Console.WriteLine(" a " + npl[c]+" b " + npl[c+1]+" d " + npl[c+2]);
+                //Console.WriteLine(" a " + npl[c]+" b " + npl[c+1]+" d " + npl[c+2]);
 
                 if (c % 0x40 == 0) npl[c + 3] = 0x0;
 
@@ -1465,6 +1518,8 @@ namespace d2_spritecomp
             }
 
             pals[0] = npl;
+
+            //File.WriteAllBytes("154pal.bin", npl);
 
             file.BaseStream.Position = weapon_pal_offset;
             for (int i = 0, c = 0; i < 0x100; i++, c += 4)
@@ -1749,12 +1804,8 @@ namespace d2_spritecomp
                 {
                     i_dat sprite_part = idat_list[c];
 
-                    int cut_width = 8;
-                    int cut_height = 8;
-
-                    for (int j = 0; j < sprite_part.len_y; j++) cut_height *= 2;
-                    for (int j = 0; j < sprite_part.len_x; j++) cut_width *= 2;
-                    //for (int j = 0; j < sprite_part.len_x; j++) cut_width +=32;
+                    int cut_width = (8 << sprite_part.len_x);
+                    int cut_height = (8 << sprite_part.len_y);
 
                     byte[] pixel_data = new byte[(cut_width * cut_height) / 2];
 
@@ -1814,7 +1865,7 @@ namespace d2_spritecomp
                     if (c_chunk.len_y > 6) break;
                     int pixel_value = pixel_data[f];
 
-                    int use_pal = (c_chunk.use_palette >= 0x20) ? 1 : 0;
+                    int use_pal = (  c_chunk.use_palette >= 0x20  ) ? 1 : 0;
                     if (use_pal == 1 && c_pal) pixel_value += 64;
 
                     if (c_pal && use_pal == 1)
@@ -1896,12 +1947,8 @@ namespace d2_spritecomp
 
                         int true_y = (chunk.pixel_data.Length / 4) / 32;
 
-                        int cut_width = 8;
-                        int cut_height = 8;
-
-                        for (int c = 0; c < chunk.len_y; c++) cut_height *= 2;
-                        for (int c = 0; c < chunk.len_x; c++) cut_width *= 2;
-                        //for (int j = 0; j < chunk.len_x; j++) cut_width += 32;
+                        int cut_width = (8 << chunk.len_x );
+                        int cut_height = (8 << chunk.len_y );
 
                         if (chunk.len_y > 6) continue;
 
