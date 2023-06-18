@@ -3,23 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Intrinsics.X86;
-using System.Threading;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp.Metadata.Profiles.Iptc;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-using SixLabors.ImageSharp.Processing.Processors.Convolution;
-using SixLabors.ImageSharp.Processing.Processors.Drawing;
-using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using SkiaSharp;
-using SkiaSharp.Internals;
-using DSDecmp;
-using DSDecmp.Formats.Nitro;
 
 namespace d2_spritecomp
 {
@@ -87,11 +75,19 @@ namespace d2_spritecomp
             public uint image_data_offset;
         }
 
+        struct Color
+        {
+            public byte r;
+            public byte g;
+            public byte b;
+            public byte a;
+        }
+
         public static bool exclude_char = false;
         public static bool exclude_wep = false;
 
         public static bool save_parts = false;
-        public static bool c_pal = false;
+        public static bool gDoGrayScale = false;
 
         public static int ndx_equip = 0;
 
@@ -161,7 +157,7 @@ namespace d2_spritecomp
                                 }
                                 break;
                             case "-grayscale":
-                                c_pal = true;
+                                gDoGrayScale = true;
                                 break;
                             case "-outdir":
                                 if(i + 1 < args.Length)
@@ -1020,7 +1016,7 @@ namespace d2_spritecomp
                 weapon_pals_list.Add(weapon_pals);
             }
 
-            if(c_pal)
+            if(gDoGrayScale)
             {
                 palettes_out_dir.Create();
                 File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_weapon_pal_"+ndx_equip+".bin"), weapon_pals_list[ndx_equip].SelectMany(x => x).ToArray());
@@ -1138,7 +1134,7 @@ namespace d2_spritecomp
                     uint pixel_1 = ((raw_byte & 0xF0) >> 4);
                     uint pixel_2 = (raw_byte & 0x0F);
 
-                    if(c_pal)
+                    if(gDoGrayScale)
                     {
                         pixel_1 += (uint)(sprite_part.use_palette & 0x0F) * 0x10;
                         pixel_2 += (uint)(sprite_part.use_palette & 0x0F) * 0x10;
@@ -1168,7 +1164,7 @@ namespace d2_spritecomp
 
                     int pxval_offset = (sprite_part.use_palette & 0x0F) * 0x10;
 
-                    if (c_pal)
+                    if (gDoGrayScale)
                     {
                         int alpha = ( pal_array[use_pal][ ( (pixel_value - pxval_offset) * 4) + 3] == 0 )? 0 : 0xff;
 
@@ -1256,7 +1252,7 @@ namespace d2_spritecomp
                 using (var surface = SKSurface.Create(info))
                 {
                     SKCanvas canvas = surface.Canvas;
-                    if (c_pal) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+                    if (gDoGrayScale) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
 
                     for (int g = 0; g < sprite_parts_list[nm]; g++, f++)
                     {
@@ -1321,7 +1317,7 @@ namespace d2_spritecomp
                         SKPaint part_paint = new SKPaint();
 
                         //destructive to grayscale palettization
-                        if(!c_pal)
+                        if(!gDoGrayScale)
                         {
                             if ((chunk.flags & V103_flag_blendmode_add) != 0)
                             {
@@ -1455,546 +1451,322 @@ namespace d2_spritecomp
             //System.Environment.Exit(0);
         }
 
-        
 
         static void V154_unpack(BinaryReader file)
         {
-            List<i_dat> idat_list = new List<i_dat>();
-
-            uint unk1 = file.ReadUInt32(); //pal related 0x4
-            uint pal_offset = file.ReadUInt32(); //0x8
-            uint unk2 = file.ReadUInt32(); //0xC
+            uint palette_block_size = file.ReadUInt32(); //pal related 0x4
+            uint main_pal_offset = file.ReadUInt32(); //0x8
+            uint unk2 = file.ReadUInt32(); //0xC, probably flags
             uint weapon_pal_offset = file.ReadUInt32(); //0x10
             //uint unk4 = file.ReadUInt32(); //0x14
 
             uint tex_length_1 = file.ReadUInt32(); //0x14
-            uint tex_offset_1 = file.ReadUInt32(); //0x18
+            uint main_texture_offset = file.ReadUInt32(); //0x18
 
             uint unk4 = file.ReadUInt32(); //0x1C
 
-            uint tex_offset_2 = file.ReadUInt32(); //only if applicable? 0x20
+            uint weapon_texture_offset = file.ReadUInt32(); //only if applicable? 0x20
 
-            uint num_chunks = file.ReadUInt32(); //0x24
+            uint total_chunks = file.ReadUInt32(); //0x24
 
-            uint chunk_tbl_offset = file.ReadUInt32(); //0x28
+            uint chunk_table_offset = file.ReadUInt32(); //0x28
 
-            uint frame_data_num = file.ReadUInt32(); //0x2C
+            uint total_frames = file.ReadUInt32(); //0x2C
 
             uint frame_data_offset = file.ReadUInt32(); //0x30
 
-            uint num_sprites = file.ReadUInt32(); //0x34
+            uint total_sprites = file.ReadUInt32(); //0x34
 
             uint sprite_def_offset = file.ReadUInt32(); //0x38
-            uint num_anim = file.ReadUInt32(); //0x3C
+            uint total_animations = file.ReadUInt32(); //0x3C
             uint animation_def_offset = file.ReadUInt32(); //0x40
 
             uint unk9 = file.ReadUInt32();
-
             uint compression_flags = file.ReadUInt32();
 
+            bool hasCompressedImages = (compression_flags & V154_flag_compress_image) != 0;
+            bool hasCompressedChunks = (compression_flags & V154_flag_compress_chunk) != 0;
+            int x_multiplier_flag = V103_flag_quadruple_x_offset | V103_flag_double_x_offset;
+            int y_multiplier_flag = V103_flag_quadruple_y_offset | V103_flag_double_y_offset;
+            uint total_palettes = palette_block_size / 2;
 
-            byte[][] pals = new byte[2][];
+            // Just 2 palettes per file
+            Color[,] pals = new Color[2, total_palettes];
 
-            //way too many bytes
-            byte[] npl = new byte[0x400];
-            byte[] npb = new byte[0x400];
-
-            file.BaseStream.Position = pal_offset;
-            for(int i = 0, c = 0; i < 0x100; i++, c+=4)
+            file.BaseStream.Position = main_pal_offset;
+            for (int i = 0; i < total_palettes; i++)
             {
                 uint col = file.ReadUInt16();
-
-                npl[c] = (byte)((col & 0x1f) * 8);
-                npl[c + 1] = (byte)(((col >> 5) & 0x1f) * 8);
-                npl[c + 2] = (byte)(((col >> 10) & 0x1f) * 8);
-                npl[c + 3] = 0xff;
-
-                //Console.WriteLine(" a " + npl[c]+" b " + npl[c+1]+" d " + npl[c+2]);
-
-                if (c % 0x40 == 0) npl[c + 3] = 0x0;
-
-
-                //if( i < 33 ) npl[c + 3] = 0;
+                pals[0, i] = new Color()
+                {
+                    r = (byte)((col & 0x1f) * 8),
+                    g = (byte)(((col >> 5) & 0x1f) * 8),
+                    b = (byte)(((col >> 10) & 0x1f) * 8),
+                    a = (byte)((i % 0x10 == 0) ? 0x00 : 0xff)
+                };
             }
 
-            pals[0] = npl;
-
-            //File.WriteAllBytes("154pal.bin", npl);
-
-            file.BaseStream.Position = weapon_pal_offset;
-            for (int i = 0, c = 0; i < 0x100; i++, c += 4)
+            // Apparently it can be 0
+            if (weapon_pal_offset != 0)
             {
-                uint col = file.ReadUInt16();
-
-                npb[c] = (byte)((col & 0x1f)*8);
-                npb[c+1] = (byte)(((col >> 5) & 0x1f)*8);
-                npb[c+2] = (byte)(((col >> 10) & 0x1f)*8);
-                npb[c+3] = 0xff;
-
-                if (c % 0x40 == 0) npb[c + 3] = 0x0;
+                file.BaseStream.Position = weapon_pal_offset;
+                for (int i = 0; i < total_palettes; i++)
+                {
+                    uint col = file.ReadUInt16();
+                    pals[1, i] = new Color()
+                    {
+                        r = (byte)((col & 0x1f) * 8),
+                        g = (byte)(((col >> 5) & 0x1f) * 8),
+                        b = (byte)(((col >> 10) & 0x1f) * 8),
+                        a = (byte)((i % 0x10 == 0) ? 0x00 : 0xff)
+                    };
+                }
             }
 
-            pals[1] = npb;
 
-            List<uint> sprite_parts_list = new List<uint>();
-            uint[] chunk_offsets = new uint[num_sprites];
+            uint[] sprite_parts_list = new uint[total_sprites];
+            uint[] chunk_offsets = new uint[total_sprites];
             file.BaseStream.Position = sprite_def_offset;
 
-            for (int a = 0; a < num_sprites; a++)
+            for (int a = 0; a < total_sprites; a++)
             {
-                uint sprite_parts = file.ReadUInt16();
+                sprite_parts_list[a] = file.ReadUInt16();
                 file.BaseStream.Position += 0xA;
 
                 chunk_offsets[a] = file.ReadUInt32();
-
-                sprite_parts_list.Add(sprite_parts);
             }
 
-            List<byte[]> c_dat_list = new List<byte[]>();
-            List<byte[]> i_dat_list = new List<byte[]>();
-
-            if( (compression_flags&V154_flag_compress_chunk) != 0)
+            BinaryReader chunk_stream = file;
+            if (hasCompressedChunks)
             {
-                for (int c = 0; c < chunk_offsets.Length; c++)
+                Console.WriteLine("#### START COMPRESSED SPRITE INFO CHUNKS ####");
+                List<byte[]> uncompressed_blobs = new List<byte[]>();
+                foreach (int chunk_offset in chunk_offsets)
                 {
-                    uint compressed_chunk_offset = chunk_offsets[c];
-
-                    file.BaseStream.Position = chunk_tbl_offset + compressed_chunk_offset;
-
-                    Console.WriteLine("cchk off: 0x{0:X}", file.BaseStream.Position);
-
-                    byte block_start = file.ReadByte();
-
-                    int decomp_len = file.ReadUInt16();
-
-                    file.BaseStream.Position -= 3;
-
-                    long b_off = file.BaseStream.Position;
-
-                    byte[] decompressed_data = new byte[decomp_len];
-
-                    LZ10 de_dat = new LZ10();
-
-                    file.BaseStream.Position = b_off;
-
-                    Console.WriteLine("offset: 0x{0:X}", file.BaseStream.Position);
-
-
-                    file.BaseStream.Position = chunk_tbl_offset + compressed_chunk_offset;
-                    using (MemoryStream test = new MemoryStream(decompressed_data))
-                    {
-                        de_dat.Decompress(file.BaseStream, file.BaseStream.Length, test);
-                    }
-
-                    //Console.WriteLine("aoffset: 0x{0:X}", file.BaseStream.Position);
-
-                    File.WriteAllBytes("compress_debug/test_" + c + ".bin", decompressed_data);
-
-                    c_dat_list.Add(decompressed_data);
-
-                    //System.Environment.Exit(0);
+                    file.BaseStream.Position = chunk_table_offset + chunk_offset;
+                    uncompressed_blobs.Add(decompress_LZ10(file));
+#if DEBUG
+                    File.WriteAllBytes($"compress_debug/test_0x{chunk_table_offset + chunk_offset:X6}.bin", uncompressed_blobs.Last());
+#endif
                 }
 
-                byte[] decompressed_chunk_table = c_dat_list.SelectMany(x => x).ToArray();
-
-                File.WriteAllBytes("compress_debug/tbl.bin", decompressed_chunk_table);
-
-                using (MemoryStream c_chnk_tbl = new MemoryStream(decompressed_chunk_table))
-                {
-                    using (BinaryReader c_chunk_read = new BinaryReader(c_chnk_tbl))
-                    {
-                        for (int c = 0; c < num_chunks; c++)
-                        {
-                            i_dat sprite_part = new i_dat();
-
-                            uint part_palette = c_chunk_read.ReadByte();
-                            uint part_flags = c_chunk_read.ReadByte();
-
-                            //uint part_unk = file.ReadByte();
-
-                            byte tile_x_y = c_chunk_read.ReadByte();
-
-                            //the first 4 bits are used for something else, the y height is stored solely in the latter 4 bits
-                            uint tile_height = (uint)(tile_x_y & 0x0F);
-                            c_chunk_read.ReadByte();
-
-                            uint tile_width = (uint)(tile_x_y & 0xF0);
-                            tile_width = (tile_width >> 4);
-
-                            Console.WriteLine(" t scale y " + tile_height + " x " + tile_width);
-                            Console.WriteLine("offset: 0x{0:X}", c_chunk_read.BaseStream.Position);
-
-                            //uint part_unk_2 = file.ReadByte();
-
-                            int part_xoff = c_chunk_read.ReadSByte();
-                            int part_yoff = c_chunk_read.ReadSByte();
-
-                            int scale_x = c_chunk_read.ReadSByte();
-                            int scale_y = c_chunk_read.ReadSByte();
-
-                            int x_rot_axis = c_chunk_read.ReadSByte();
-                            int y_rot_axis = c_chunk_read.ReadSByte();
-
-                            int x_center = c_chunk_read.ReadInt16();
-                            int y_center = c_chunk_read.ReadInt16();
-
-                            int rot_angle = c_chunk_read.ReadInt16();
-
-                            int tile_y = c_chunk_read.ReadInt16();
-
-                            sprite_part.y = tile_y;
-
-                            sprite_part.rot_axis_x = x_center + x_rot_axis;
-                            sprite_part.rot_axis_y = y_center + y_rot_axis;
-
-                            //sprite_part.rot_axis_y = y_rot_axis;
-                            //sprite_part.rot_axis_y = y_rot_axis;
-
-                            sprite_part.chunk_center_x = x_center;
-                            sprite_part.chunk_center_y = y_center;
-
-
-                            sprite_part.rot_angle = rot_angle;
-                            sprite_part.scale_x = scale_x;
-                            sprite_part.scale_y = scale_y;
-
-
-                            sprite_part.paste_x = part_xoff;
-                            sprite_part.paste_y = part_yoff;
-                            sprite_part.flags = (int)part_flags;
-
-                            Console.WriteLine("part flgs value " + part_flags);
-
-                            Console.WriteLine("load pal usevl: " + part_palette);
-
-                            sprite_part.use_palette = (int)part_palette;
-
-                            sprite_part.len_x = (int)tile_width;
-                            sprite_part.len_y = (int)tile_height;
-
-                            idat_list.Add(sprite_part);
-                        }
-                    }
-                }
-
-
-
+                byte[] decompressed_chunk_table = uncompressed_blobs.SelectMany(x => x).ToArray();
+                chunk_stream = new BinaryReader(new MemoryStream(decompressed_chunk_table));
+#if DEBUG
+                File.WriteAllBytes("compress_debug/chunks_blob.bin", decompressed_chunk_table);
+#endif
+                Console.WriteLine("#### END COMPRESSED SPRITE INFO CHUNKS ####");
+                Console.WriteLine("");
             }
             else
             {
-                file.BaseStream.Position = chunk_tbl_offset;
-                for (int c = 0; c < num_chunks; c++)
-                {
-                    Console.WriteLine("working part " + c);
-                    i_dat sprite_part = new i_dat();
-
-                    uint part_palette = file.ReadByte();
-                    uint part_flags = file.ReadByte();
-
-                    //uint part_unk = file.ReadByte();
-
-                    byte tile_x_y = file.ReadByte();
-
-                    //the first 4 bits are used for something else, the y height is stored solely in the latter 4 bits
-                    uint tile_height = (uint)(tile_x_y & 0x0F);
-                    file.ReadByte();
-
-                    uint tile_width = (uint)(tile_x_y & 0xF0);
-                    tile_width = (tile_width >> 4);
-
-                    Console.WriteLine(" t scale y " + tile_height + " x " + tile_width);
-                    Console.WriteLine("offset: 0x{0:X}", file.BaseStream.Position);
-
-                    //uint part_unk_2 = file.ReadByte();
-
-                    int part_xoff = file.ReadSByte();
-                    int part_yoff = file.ReadSByte();
-
-                    int scale_x = file.ReadSByte();
-                    int scale_y = file.ReadSByte();
-
-                    int x_rot_axis = file.ReadSByte();
-                    int y_rot_axis = file.ReadSByte();
-
-                    int x_center = file.ReadInt16();
-                    int y_center = file.ReadInt16();
-
-                    int rot_angle = file.ReadInt16();
-
-                    int tile_y = file.ReadInt16();
-
-                    sprite_part.y = tile_y;
-
-                    sprite_part.rot_axis_x = x_center + x_rot_axis;
-                    sprite_part.rot_axis_y = y_center + y_rot_axis;
-
-                    //sprite_part.rot_axis_y = y_rot_axis;
-                    //sprite_part.rot_axis_y = y_rot_axis;
-
-                    sprite_part.chunk_center_x = x_center;
-                    sprite_part.chunk_center_y = y_center;
-
-
-                    sprite_part.rot_angle = rot_angle;
-                    sprite_part.scale_x = scale_x;
-                    sprite_part.scale_y = scale_y;
-
-
-                    sprite_part.paste_x = part_xoff;
-                    sprite_part.paste_y = part_yoff;
-                    sprite_part.flags = (int)part_flags;
-
-                    Console.WriteLine("part flgs value " + part_flags);
-
-                    Console.WriteLine("load pal usevl: " + part_palette);
-
-                    sprite_part.use_palette = (int)part_palette;
-
-                    sprite_part.len_x = (int)tile_width;
-                    sprite_part.len_y = (int)tile_height;
-
-                    //if (chunk.len_y > 6) continue;
-
-                    idat_list.Add(sprite_part);
-                }
+                chunk_stream.BaseStream.Position = chunk_table_offset;
             }
 
-
-            if ((compression_flags & V154_flag_compress_image) != 0)
+            i_dat[] idat_list = new i_dat[total_chunks];
+            for (int c = 0; c < total_chunks; c++)
             {
-                for (int c = 0; c < idat_list.Count; c++)
+                i_dat spr = new i_dat();
+
+                spr.use_palette = chunk_stream.ReadByte();
+                spr.flags = chunk_stream.ReadByte();
+                byte tile_x_y = chunk_stream.ReadByte();
+
+                spr.len_x = (tile_x_y & 0xF0) >> 4;
+                spr.len_y = tile_x_y & 0x0F;
+
+                // skip unk
+                chunk_stream.ReadByte();
+
+                spr.paste_x = chunk_stream.ReadSByte();
+                spr.paste_y = chunk_stream.ReadSByte();
+
+                // Apply multiplier flags
+                if ((spr.flags & x_multiplier_flag) != 0)
                 {
-                    i_dat c_chunk = idat_list[c];
+                    spr.paste_x *= ((spr.flags & V103_flag_quadruple_x_offset) != 0) ? 4 : 2;
+                }
+                if ((spr.flags & y_multiplier_flag) != 0)
+                {
+                    spr.paste_y *= ((spr.flags & V103_flag_quadruple_y_offset) != 0) ? 4 : 2;
 
-                    int sheet_select = (c_chunk.use_palette & 0xF0) >> 4;
+                }
 
-                    bool use_weapon = (sheet_select) == 1;
+                spr.scale_x = chunk_stream.ReadSByte();
+                spr.scale_y = chunk_stream.ReadSByte();
 
-                    uint base_offset = (use_weapon)? tex_offset_2 : tex_offset_1;
+                spr.rot_axis_x = chunk_stream.ReadSByte();
+                spr.rot_axis_y = chunk_stream.ReadSByte();
 
-                    uint tex_offset = (uint)(base_offset + ( (c_chunk.x*16)+(c_chunk.y * 32) ) );
+                spr.chunk_center_x = chunk_stream.ReadInt16();
+                spr.chunk_center_y = chunk_stream.ReadInt16();
 
-                    file.BaseStream.Position = (tex_offset) + 1;
-                    uint uncomp_len = file.ReadUInt16();
+                spr.rot_angle = chunk_stream.ReadInt16();
+
+                spr.y = chunk_stream.ReadInt16();
+
+                spr.rot_axis_x += spr.chunk_center_x;
+                spr.rot_axis_y += spr.chunk_center_y;
+
+                Console.WriteLine($"PROCESED CHUNK {c:d} of {total_chunks:d}");
+                Console.WriteLine($"  Tile scale X: {spr.len_x:d}, Y: {spr.len_y:d}");
+                Console.WriteLine($"  offset: 0x{chunk_stream.BaseStream.Position:X}");
+                Console.WriteLine($"  Part flags value: 0x{spr.flags:X}");
+                Console.WriteLine($"  Palette value: {spr.use_palette:d}");
+                Console.WriteLine("");
+
+                // add to list
+                idat_list[c] = spr;
+            }
+
+            // Dispose the extra stream needed for compressed chunks
+            if (hasCompressedChunks) chunk_stream.Dispose();
+
+            // Gather image blobs
+            for (int i = 0; i < idat_list.Length; i++)
+            {
+                int use_weapon = (idat_list[i].use_palette & 0xF0) >> 4;
+                uint tex_offset = use_weapon == 1 ? weapon_texture_offset : main_texture_offset;
+
+                if (hasCompressedImages)
+                {
+                    tex_offset += (uint)(idat_list[i].x * 16 + idat_list[i].y * 32);
                     file.BaseStream.Position = tex_offset;
-
-                    byte[] decompressed_data = new byte[uncomp_len];
-                    LZ10 im_dat = new LZ10();
-                    using (MemoryStream test = new MemoryStream(decompressed_data))
-                    {
-                        //Console.WriteLine("tex offset: 0x{0:X}", tex_offset);
-
-                        //Console.WriteLine("provided offset x from chunk: 0x{0:X}", c_chunk.x);
-                        //Console.WriteLine("provided offset y from chunk: 0x{0:X}", c_chunk.y);
-
-                        //Console.WriteLine("read at: 0x{0:X}", file.BaseStream.Position);
-                        im_dat.Decompress(file.BaseStream, file.BaseStream.Length, test);
-                    }
-
-                    c_chunk.pixel_data = decompressed_data;
-
-                    idat_list[c] = c_chunk;
-
-                    Console.WriteLine("pixeldat chunk "+c+" of "+idat_list.Count);
+                    idat_list[i].pixel_data = decompress_LZ10(file);
                 }
-            }
-            else
-            {
-                for (int c = 0; c < idat_list.Count; c++)
+                else
                 {
-                    i_dat sprite_part = idat_list[c];
+                    int cut_width = 8 << idat_list[i].len_x;
+                    int cut_height = 8 << idat_list[i].len_y;
 
-                    int cut_width = (8 << sprite_part.len_x);
-                    int cut_height = (8 << sprite_part.len_y);
-
-                    byte[] pixel_data = new byte[(cut_width * cut_height) / 2];
-
-                    Console.WriteLine(" lw " + sprite_part.len_x + " ly " + sprite_part.len_y);
-                    Console.WriteLine("projected pxldt size " + pixel_data.Length);
-
-
-                    int sheet_select = (sprite_part.use_palette & 0xF0) >> 4;
-
-                    if (sheet_select == 0)
-                    {
-                        file.BaseStream.Position = tex_offset_1 + (sprite_part.y * 32);
-                    }
-                    else
-                    {
-                        file.BaseStream.Position = tex_offset_2 + (sprite_part.y * 32);
-                    }
-
-                    pixel_data = file.ReadBytes(pixel_data.Length);
-
-                    sprite_part.pixel_data = pixel_data;
-                    idat_list[c] = sprite_part;
+                    tex_offset += (uint)(idat_list[i].y * 32);
+                    file.BaseStream.Position = tex_offset;
+                    idat_list[i].pixel_data = file.ReadBytes((cut_width * cut_height) / 2);
                 }
 
+                Console.WriteLine($"PROCESSED IMAGE DATA {i:d} of {idat_list.Length:d}");
+                Console.WriteLine($"  isCompressed: {hasCompressedImages}");
+                Console.WriteLine($"  Img width: {idat_list[i].len_x:d}");
+                Console.WriteLine($"  Img Height: {idat_list[i].len_y:d}");
+                Console.WriteLine($"  Image data size: {idat_list[i].pixel_data.Length:d}");
+                Console.WriteLine("");
             }
 
-            //fix up pixel data
-            for(int i = 0; i < idat_list.Count; i++)
+            // Convert images to direct color
+            // This can be done in the previous loop for less run-time
+            for (int i = 0; i < idat_list.Length; i++)
             {
                 i_dat c_chunk = idat_list[i];
-                byte[] pixel_data = new byte[c_chunk.pixel_data.Length * 2];
+                if (c_chunk.len_y > 6) continue;
 
-                for (int d = 0, f = 0; d < c_chunk.pixel_data.Length; d++, f += 2)
+                // 4bpp indexed -> RGBA8888 conversion
+                byte[] direct_color_data = new byte[c_chunk.pixel_data.Length * 8];
+                Console.WriteLine($"CONVERTING IMAGE DATA {i:d} of {idat_list.Length:d}");
+                Console.WriteLine($"  RGBA8888 image size: {direct_color_data.Length:d}");
+
+                for (int j = 0; j < c_chunk.pixel_data.Length; j++)
                 {
-                    if (c_chunk.len_y > 6) break;
-                    uint raw_byte = c_chunk.pixel_data[d];
-                    uint pixel_1 = ((raw_byte & 0xF0) >> 4);
-                    uint pixel_2 = (raw_byte & 0x0F);
+                    int out_pixel_index = j * 8;
+                    uint raw_byte = c_chunk.pixel_data[j];
+                    byte pixel1 = (byte)(raw_byte & 0x0F);
+                    byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
 
-                    pixel_1 += (uint)c_chunk.use_palette * 0x10;
-                    pixel_2 += (uint)c_chunk.use_palette * 0x10;
+                    pixel1 += (byte)(c_chunk.use_palette * 0x10);
+                    pixel2 += (byte)(c_chunk.use_palette * 0x10);
 
-                    pixel_data[f + 1] = (byte)pixel_1;
-                    pixel_data[f] = (byte)pixel_2;
-                }
-
-                //File.WriteAllBytes("testpxdat.bin",pixel_data);
-
-                byte[] colored_pixel_data = new byte[pixel_data.Length * 4];
-
-                Console.WriteLine("projected fullclr size " + colored_pixel_data.Length);
-
-                //System.Environment.Exit(0);
-
-                for (int f = 0; f < pixel_data.Length; f++)
-                {
-                    if (c_chunk.len_y > 6) break;
-                    int pixel_value = pixel_data[f];
-
-                    int use_pal = (  c_chunk.use_palette >= 0x20  ) ? 1 : 0;
-                    if (use_pal == 1 && c_pal) pixel_value += 64;
-
-                    if (c_pal && use_pal == 1)
+                    int pal = (c_chunk.use_palette >= 0x20) ? 1 : 0;
+                    if (pal == 1 && gDoGrayScale)
                     {
-                        //Console.WriteLine(pixel_value);
-                        //System.Environment.Exit(0);
+                        pixel1 += 64;
+                        pixel2 += 64;
                     }
 
-                    if (c_pal)
+                    if (gDoGrayScale)
                     {
-                        colored_pixel_data[(f * 4) + 0] = (byte)pixel_value;
-                        colored_pixel_data[(f * 4) + 1] = (byte)pixel_value;
-                        colored_pixel_data[(f * 4) + 2] = (byte)pixel_value;
-                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
+                        direct_color_data[out_pixel_index + 0] = pixel1;
+                        direct_color_data[out_pixel_index + 1] = pixel1;
+                        direct_color_data[out_pixel_index + 2] = pixel1;
+                        direct_color_data[out_pixel_index + 3] = pals[pal, pixel1].a;
+
+                        direct_color_data[out_pixel_index + 4] = pixel2;
+                        direct_color_data[out_pixel_index + 5] = pixel2;
+                        direct_color_data[out_pixel_index + 6] = pixel2;
+                        direct_color_data[out_pixel_index + 7] = pals[pal, pixel1].a;
                     }
                     else
                     {
-                        colored_pixel_data[(f * 4) + 0] = pals[use_pal][(pixel_value * 4) + 0];
-                        colored_pixel_data[(f * 4) + 1] = pals[use_pal][(pixel_value * 4) + 1];
-                        colored_pixel_data[(f * 4) + 2] = pals[use_pal][(pixel_value * 4) + 2];
-                        colored_pixel_data[(f * 4) + 3] = pals[use_pal][(pixel_value * 4) + 3];
-                    }
+                        direct_color_data[out_pixel_index + 0] = pals[pal, pixel1].r;
+                        direct_color_data[out_pixel_index + 1] = pals[pal, pixel1].g;
+                        direct_color_data[out_pixel_index + 2] = pals[pal, pixel1].b;
+                        direct_color_data[out_pixel_index + 3] = pals[pal, pixel1].a;
 
-
-                    if (pixel_value == 0)
-                    {
-                        //hide
-                        colored_pixel_data[(f * 4) + 3] = 0;
-                    }
-                    else
-                    {
-                        //multiply alpha
-                        int use_al = (colored_pixel_data[(f * 4) + 3] * 2 > 255) ? 255 : colored_pixel_data[(f * 4) + 3];
-
-                        colored_pixel_data[(f * 4) + 3] = (byte)use_al;
+                        direct_color_data[out_pixel_index + 4] = pals[pal, pixel2].r;
+                        direct_color_data[out_pixel_index + 5] = pals[pal, pixel2].g;
+                        direct_color_data[out_pixel_index + 6] = pals[pal, pixel2].b;
+                        direct_color_data[out_pixel_index + 7] = pals[pal, pixel2].a;
                     }
                 }
 
-                if (c_chunk.use_palette == 0x20)
-                {
-                    //File.WriteAllBytes("test.bin", pixel_data);
-                    //System.Environment.Exit(0);
-                }
-
-                c_chunk.pixel_data = colored_pixel_data;
-
-                idat_list[i] = c_chunk;
+                idat_list[i].pixel_data = direct_color_data;
             }
 
 
-            Console.WriteLine("confirmed " + sprite_parts_list.Count + " spr");
+            // We saving bros, create output folders
+            out_dir.Create();
+            if (save_parts) part_out_dir.Create();
 
-            for (int nm = 0, f = 0; nm < sprite_parts_list.Count; nm++)
+            var info = new SKImageInfo(1024, 768);
+            int off_x = info.Width / 2;
+            int off_y = (info.Height / 2 + 128);
+
+            for (int nm = 0, f = 0; nm < sprite_parts_list.Length; nm++)
             {
                 List<SKBitmap> bitmp_list = new List<SKBitmap>();
-                var info = new SKImageInfo(1024, 768);
                 using (var surface = SKSurface.Create(info))
                 {
                     SKCanvas canvas = surface.Canvas;
-                    if (c_pal) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+                    if (gDoGrayScale) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
 
                     for (int g = 0; g < sprite_parts_list[nm]; g++, f++)
                     {
-                        uint num_to_process = sprite_parts_list[nm];
                         i_dat chunk = idat_list[f];
-
-                        //dont draw cursed chunks
+                        // Skip cursed chunks
                         if (((chunk.use_palette & 0xF0) >> 4) > 1) continue;
 
-                        //oops?????
-                        //if (chunk.len_x == 0) continue;
-
-                        Console.WriteLine("using palette: " + chunk.use_palette + " sz: x " + chunk.len_x + " y " + chunk.len_y + " file_len " + chunk.pixel_data.Length);
-                        //File.WriteAllBytes("palette_data.bin", pals[0]);
-                        //File.WriteAllBytes("pixel_data.bin", chunk.pixel_data);
-
-                        Console.WriteLine("chunk xl "+chunk.len_x+" chunk yl "+chunk.len_y);
-                        //System.Environment.Exit(0);
-
-                        int true_y = (chunk.pixel_data.Length / 4) / 32;
-
-                        int cut_width = (8 << chunk.len_x );
-                        int cut_height = (8 << chunk.len_y );
-
+                        // Skip whatever this is
                         if (chunk.len_y > 6) continue;
 
-                        Console.WriteLine("len " + chunk.len_y + " ch " + cut_height);
+                        // Power of 2-inator
+                        int cut_width = 8 << chunk.len_x;
+                        int cut_height = 8 << chunk.len_y;
 
-                        byte[] test = new byte[] { 50, 50, 50, 255 };
+                        //Console.WriteLine("using palette: " + chunk.use_palette + " sz: x " + chunk.len_x + " y " + chunk.len_y + " file_len " + chunk.pixel_data.Length);
+                        //Console.WriteLine("chunk xl " + chunk.len_x + " chunk yl " + chunk.len_y);
+                        //Console.WriteLine("len " + chunk.len_y + " ch " + cut_height);
+                        //Console.WriteLine("cut at: " + (chunk.y * 2) + " tru y: " + chunk.pixel_data.Length / 128);
+                        //Console.WriteLine("cutsz x: " + cut_width + " y: " + cut_height);
 
-                        Console.WriteLine("cut at: " + (chunk.y * 2) + " tru y: " + true_y);
-
-                        Console.WriteLine("cutsz x: " + cut_width + " y: " + cut_height);
 
                         SKBitmap part_image = new SKBitmap();
 
                         //stackoverflow bros
-
                         // pin the managed array so that the GC doesn't move it
                         var gcHandle = GCHandle.Alloc(chunk.pixel_data, GCHandleType.Pinned);
 
                         // install the pixels with the color type of the pixel data
                         var infoa = new SKImageInfo(cut_width, cut_height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
-                        part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, null, delegate { gcHandle.Free(); }, null);
+                        part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, delegate { gcHandle.Free(); }, null);
 
                         Console.WriteLine("check");
-
-                        SKBitmap part_image_canvas = new SKBitmap(info.Width, info.Height);
-                        SKCanvas part_canvas = new SKCanvas(part_image_canvas);
 
                         if (save_parts)
                         {
                             bitmp_list.Add(part_image);
                         }
 
-                        int off_x = info.Width / 2;
-                        int off_y = (info.Height / 2 + 128);
-
-                        canvas.Save();
-
-                        float prt_scl_x = (chunk.scale_x / 10f);
-                        float prt_scl_y = (chunk.scale_y / 10f);
-
-                        canvas.Scale(2.0f, 2.0f, info.Width / 2, info.Height / 2);
-
-
                         SKPaint part_paint = new SKPaint();
-                        //destructive to grayscale palettization
-                        if (!c_pal)
+                        // Blend modes are destructive to grayscale palettization
+                        if (!gDoGrayScale)
                         {
                             if ((chunk.flags & V103_flag_blendmode_add) != 0)
                             {
@@ -2006,95 +1778,61 @@ namespace d2_spritecomp
                             }
                         }
 
-                        int t_x = off_x;
-                        int t_y = off_y;
+                        canvas.Save();
+                        canvas.Scale(2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                        float prt_scl_x = chunk.scale_x / 10f;
+                        float prt_scl_y = chunk.scale_y / 10f;
 
-                        int paste_x_multi = 1;
-                        int paste_y_multi = 1;
+                        canvas.RotateDegrees(chunk.rot_angle, off_x + chunk.rot_axis_x, off_y - chunk.rot_axis_y);
+                        canvas.Scale(prt_scl_x, prt_scl_y, off_x + chunk.chunk_center_x, off_y - chunk.chunk_center_y);
 
-                        //x multi flags
-                        if ((chunk.flags & V103_flag_quadruple_x_offset) != 0)
+
+                        SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
+
+                        switch (chunk.flags & (V103_flag_flip_x | V103_flag_flip_y))
                         {
-                            paste_x_multi = 4;
-                        }
-                        else
-                        if ((chunk.flags & V103_flag_double_x_offset) != 0)
-                        {
-                            paste_x_multi = 2;
-                        }
-
-                        //y multi flags
-                        if ((chunk.flags & V103_flag_quadruple_y_offset) != 0)
-                        {
-                            paste_y_multi = 4;
-                        }
-                        else
-                        if ((chunk.flags & V103_flag_double_y_offset) != 0)
-                        {
-                            paste_y_multi = 2;
-                        }
-
-                        int paste_x = chunk.paste_x * paste_x_multi;
-                        int paste_y = chunk.paste_y * paste_y_multi;
-
-                        //SKPoint canvas_trans = new SKPoint( (( (chunk.paste_x * prt_scl_x) - ( (cut_width * prt_scl_x) / 2) )) + off_x, (chunk.paste_y - (cut_height / 2)  ) + off_y);
-                        SKPoint canvas_trans = new SKPoint((paste_x - (cut_width / 2)) + off_x, (paste_y - (cut_height / 2)) + off_y);
-
-                        canvas.RotateDegrees(chunk.rot_angle, t_x + chunk.rot_axis_x, t_y - chunk.rot_axis_y);
-                        canvas.Scale(prt_scl_x, prt_scl_y, t_x + chunk.chunk_center_x, t_y - chunk.chunk_center_y);
-
-                        //if (prt_scl_x != 1) canvas.Scale(prt_scl_x, prt_scl_y);
-
-                        //canvas.Translate(canvas_trans.X, canvas_trans.Y);
-
-                        float use_scl_x = ((chunk.flags & V103_flag_flip_x) != 0) ? -1 : 1;
-                        float use_scl_y = ((chunk.flags & V103_flag_flip_y) != 0) ? -1 : 1;
-
-                        float use_flp_trans_x = ((chunk.flags & V103_flag_flip_x) != 0) ? canvas_trans.X = (paste_x + (cut_width / 2)) + off_x : canvas_trans.X;
-                        float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (paste_y + (cut_height / 2)) + off_y : canvas_trans.Y;
-
-
-                        if ((chunk.flags & V103_flag_flip_x | V103_flag_flip_y) != 0)
-                        {
-                            canvas.Scale(use_scl_x, use_scl_y, use_flp_trans_x, use_flp_trans_y);
-                            //canvas.Translate(0, 0);
-                            //canvas_trans.X *= -1;
+                            case V103_flag_flip_x:
+                                canvas_trans.X = (chunk.paste_x + (cut_width / 2)) + off_x;
+                                canvas.Scale(-1, 1, canvas_trans.X, canvas_trans.Y);
+                                break;
+                            case V103_flag_flip_y:
+                                canvas_trans.Y = (chunk.paste_y + (cut_height / 2)) + off_y;
+                                canvas.Scale(1, -1, canvas_trans.X, canvas_trans.Y);
+                                break;
+                            case V103_flag_flip_x | V103_flag_flip_y:
+                                canvas_trans.X = (chunk.paste_x + (cut_width / 2)) + off_x;
+                                canvas_trans.Y = (chunk.paste_y + (cut_height / 2)) + off_y;
+                                canvas.Scale(-1, -1, canvas_trans.X, canvas_trans.Y);
+                                break;
                         }
 
-                        canvas.DrawBitmap(part_image, new SKPoint(canvas_trans.X, canvas_trans.Y), part_paint);
-                        //canvas.DrawBitmap(part_image, new SKPoint(0, 0));
+                        canvas.DrawBitmap(part_image, canvas_trans, part_paint);
                         canvas.Restore();
 
-                        Console.WriteLine("part " + g + " sprite " + nm);
+                        //Console.WriteLine("part " + g + " sprite " + nm);
                     }
 
                     Console.WriteLine("begin save " + nm);
 
-                    canvas.Save();
-
                     DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
-
-                    out_dir.Create();
 
                     string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
+                    // save the data to a stream
                     using (var image = surface.Snapshot())
                     using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
                     using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_" + nm + ".png")))
                     {
-                        // save the data to a stream
                         data.SaveTo(stream);
                     }
 
                     if (save_parts)
                     {
-                        part_out_dir.Create();
-
                         for (int l = 0; l < bitmp_list.Count; l++)
                         {
                             Console.WriteLine("svpart " + f);
                             using (var data = bitmp_list[l].Encode(SKEncodedImageFormat.Png, 100))
-                            using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_a_" + nm + "_" + l + "_indx_"+(f-bitmp_list.Count+l)+".png")))
+                            using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_a_" + nm + "_" + l + "_indx_" + (f - bitmp_list.Count + l) + ".png")))
                             {
                                 // save the data to a stream
                                 data.SaveTo(stream);
@@ -2103,8 +1841,62 @@ namespace d2_spritecomp
                     }
 
                 }
-
             }
+        }
+
+        // function is at 0x2071BAC in Hearts DS anime movie edition
+        // this skips the lower nybble handling that function has
+        // because apparently, those are reserved
+        static byte[] decompress_LZ10(BinaryReader file)
+        {
+            Console.WriteLine("Decompressed from  -> 0x{0:X}", file.BaseStream.Position);
+            uint header;
+            byte magic;
+            int size;
+            byte[] data;
+
+            header = file.ReadUInt32();
+            size = (int)(header >> 8);
+            magic = (byte)header;
+            if (magic != 0x10 || size == 0)
+            {
+                throw new InvalidDataException("Ivalid LZ10 file, magic: " + magic + ", decompressed size: " + size);
+            }
+
+            data = new byte[size];
+            uint flags;
+            int cursor = 0;
+
+            while (size > 0)
+            {
+                flags = file.ReadByte();
+                for (int i = 0; i < 8; i++, flags <<= 1)
+                {
+                    if ((flags & 0x80) == 0)
+                    {
+                        data[cursor++] = file.ReadByte();
+                        size--;
+                    }
+                    else
+                    {
+                        byte max_ref;
+                        short backref;
+                        max_ref = file.ReadByte();
+                        backref = (short)(((max_ref & 0xf) << 8) | file.ReadByte() + 1);
+                        max_ref >>= 4;
+
+                        for (int j = -3; j < max_ref; j++)
+                        {
+                            data[cursor] = data[cursor++ - backref];
+                            size--;
+                        }
+                    }
+
+                    if (size <= 0) break;
+                }
+            }
+            Console.WriteLine("Decompressed until -> 0x{0:X}", file.BaseStream.Position);
+            return data;
         }
     }
 }
