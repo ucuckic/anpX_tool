@@ -4,9 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using SkiaSharp;
 
 namespace d2_spritecomp
@@ -14,12 +11,12 @@ namespace d2_spritecomp
     class Program
     {
         //texture flags (second part/ first flags)
-        const int _flag_negative_blend = 0x20;
-        const int _flag_flip_x = 0x40;
-        const int _flag_flip_y = 0x80;
+        const int anp2_flag_negative_blend = 0x20;
+        const int anp2_flag_flip_x = 0x40;
+        const int anp2_flag_flip_y = 0x80;
 
         //more texture flags
-        const int _flag_enable_rotation = 0x20;
+        const int anp2_flag_enable_rotation = 0x20;
 
         //anp3
 
@@ -203,7 +200,8 @@ namespace d2_spritecomp
 
         static void anp2_unpack(BinaryReader chunk_dat, string in_path)
         {
-            using var in_sheet = Image<Rgba32>.Load(in_path);
+            int chnk_sv = 0;
+            using var in_sheet = SKBitmap.Decode(in_path);
             List<i_dat> idat_list = new List<i_dat>();
             uint num_sprites = chunk_dat.ReadByte();
 
@@ -328,7 +326,7 @@ namespace d2_spritecomp
                     add_dat.flags = tex_flags;
                     add_dat.flags_2 = tex_flags_2;
 
-                    if ((tex_flags_2 & _flag_enable_rotation) != 0)
+                    if ((tex_flags_2 & anp2_flag_enable_rotation) != 0)
                     {
                         chunk_dat.BaseStream.Position += 2;
 
@@ -345,6 +343,126 @@ namespace d2_spritecomp
                     chunk_dat.BaseStream.Position = current_offset;
                 }
 
+                out_dir.Create();
+                if (save_parts) part_out_dir.Create();
+
+                var info = new SKImageInfo(512, 512);
+                int off_x = info.Width / 2;
+                int off_y = (info.Height / 2);
+
+                List<SKBitmap> bitmp_list = new List<SKBitmap>();
+                using (var surface = SKSurface.Create(info))
+                {
+                    SKCanvas canvas = surface.Canvas;
+                    if (gDoGrayScale) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+
+                    for (int g = 0; g < idat_list.Count(); g++, chnk_sv++)
+                    {
+                        i_dat chunk = idat_list[g];
+
+                        if (chunk.len_x > in_sheet.Width) continue;
+                        if (chunk.len_y > in_sheet.Height) continue;
+                        if (chunk.x > in_sheet.Width) continue;
+                        if (chunk.y > in_sheet.Height) continue;
+                        if (chunk.y + chunk.len_y > in_sheet.Height) continue;
+                        if (chunk.x + chunk.len_x > in_sheet.Height) continue;
+
+
+                        int cut_width = chunk.len_x;
+                        int cut_height = chunk.len_y;
+
+                        SKPaint part_paint = new SKPaint();
+                        // Blend modes are destructive to grayscale palettization
+                        if (!gDoGrayScale)
+                        {
+                            if ((chunk.flags & anp3_flag_enable_opacity) != 0)
+                            {
+                                //part_paint.BlendMode = SKBlendMode.Plus;
+                            }
+                        }
+
+                        canvas.Save();
+                        canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+
+                        float prt_scl_x = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
+                        float prt_scl_y = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;
+
+                        //SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
+                        //SKPoint canvas_trans = new SKPoint(off_x - ((cut_width / 2)), off_y - ((cut_height / 2)));
+                        SKPoint canvas_trans = new SKPoint(off_x, off_y);
+                        SKPoint chunk_center = new SKPoint(chunk.len_x / 2, chunk.len_y / 2);
+
+                        canvas.Translate(canvas_trans.X, canvas_trans.Y);
+                        canvas.Translate(chunk.paste_x - (chunk.len_x / 2), chunk.paste_y - (chunk.len_y / 2));
+
+                        
+                        //if ((chunk.flags_2 & anp3_flag_enable_scale) != 0) canvas.Scale(prt_scl_x, prt_scl_y, chunk_center.X, chunk_center.Y);
+
+
+
+                        if ((chunk.flags_2 & anp2_flag_enable_rotation) != 0)
+                        {
+                            canvas.RotateDegrees(chunk.rot_angle / 11.33f, chunk_center.X + chunk.rot_axis_x, chunk_center.Y + chunk.rot_axis_y);
+                        }
+
+
+                        switch (chunk.flags & (anp2_flag_flip_x | anp2_flag_flip_y))
+                        {
+                            case anp2_flag_flip_x:
+                                canvas.Scale(-1, 1, chunk_center.X, chunk_center.Y);
+                                break;
+                            case anp2_flag_flip_y:
+                                canvas.Scale(1, -1, chunk_center.X, chunk_center.Y);
+                                break;
+                            case anp2_flag_flip_x | anp2_flag_flip_y:
+                                canvas.Scale(-1, -1, chunk_center.X, chunk_center.Y);
+                                break;
+                        }
+                        
+
+                        Console.WriteLine("cx "+chunk.x+" cy "+chunk.y);
+
+                        canvas.DrawBitmap(in_sheet, new SKRect(chunk.x,chunk.y, chunk.x+chunk.len_x, chunk.y+chunk.len_y), new SKRect(0,0,chunk.len_x,chunk.len_y), part_paint);
+                        //canvas.DrawBitmap(in_sheet, new SKPoint(0, 0));
+                        canvas.Restore();
+
+                        //Console.WriteLine("part " + g + " sprite " + nm);
+                    }
+
+                    //Console.WriteLine("begin save " + b);
+
+                    DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+
+                    string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+                    // save the data to a stream
+                    using (var image = surface.Snapshot())
+                    using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                    using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png")))
+                    {
+                        data.SaveTo(stream);
+                        //System.Environment.Exit(0);
+                    }
+                    /*
+                    if (save_parts)
+                    {
+                        for (int l = 0; l < bitmp_list.Count; l++)
+                        {
+                            //Console.WriteLine("svpart " + b);
+                            using (var data = bitmp_list[l].Encode(SKEncodedImageFormat.Png, 100))
+                            using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_a_" + a + "_f_" + b + "_p_" + l + "_indx_" + chnk_sv + ".png")))
+                            {
+                                // save the data to a stream
+                                data.SaveTo(stream);
+                            }
+                        }
+                    }
+                    */
+                }
+
+
+                idat_list.Clear();
+                /*
                 using (Image<Rgba32> image = new(512, 512))
                 {
                     string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
@@ -406,6 +524,7 @@ namespace d2_spritecomp
 
                 }
                 idat_list.Clear();
+                */
             }
         }
 
@@ -544,7 +663,11 @@ namespace d2_spritecomp
                 //unk
                 anp3_file.BaseStream.Position += 2;
 
-                for(int b = 0; b < c_ani_frame_count; b++)
+
+
+                int chnk_sv = 0;
+
+                for (int b = 0; b < c_ani_frame_count; b++)
                 {
                     uint last_pos_anim = (uint)anp3_file.BaseStream.Position;
 
@@ -778,166 +901,128 @@ namespace d2_spritecomp
                     }
 
 
-                    using (Image<Rgba32> image = new(1024, 768))
+                    out_dir.Create();
+                    if (save_parts) part_out_dir.Create();
+
+                    var info = new SKImageInfo(1024, 768);
+                    int off_x = info.Width / 2;
+                    int off_y = (info.Height / 2 + 128);
+
+                    idat_list.Reverse();
+
+                    List<SKBitmap> bitmp_list = new List<SKBitmap>();
+                    using (var surface = SKSurface.Create(info))
                     {
-                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+                        SKCanvas canvas = surface.Canvas;
+                        if (gDoGrayScale) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
 
-                        idat_list.Reverse();
-                        //image.Mutate(o => o.Opacity(0));
-                        foreach (i_dat chunk in idat_list)
+                        for (int g = 0; g < idat_list.Count(); g++, chnk_sv++)
                         {
-                            //oops?????
-                            if (chunk.len_x == 0 || chunk.len_y == 0) continue;
+                            i_dat chunk = idat_list[g];
 
-                            //if (chunk.len_x > in_sheet.Width) continue;
-                            //if (chunk.len_y > in_sheet.Height) continue;
-                            //if (chunk.x > in_sheet.Width) continue;
-                            //if (chunk.y > in_sheet.Height) continue;
-                            //if (chunk.y + chunk.len_y > in_sheet.Height) continue;
-                            //if (chunk.x + chunk.len_x > in_sheet.Height) continue;
+                            int cut_width = chunk.len_x;
+                            int cut_height = chunk.len_y;
 
-                            Console.WriteLine("using palette: "+chunk.use_palette+" sz: x "+chunk.len_x+" y "+chunk.len_y+" file_len "+chunk.pixel_data.Length);
-                            //File.WriteAllBytes("palette_data.bin", pals[0]);
-                            //File.WriteAllBytes("pixel_data.bin",chunk.pixel_data);
 
-                            byte[] test = new byte[] { 50, 50, 50, 255 };
-                            
-                            using (Image<Rgba32> part_image = Image.LoadPixelData<Rgba32>(chunk.pixel_data, chunk.len_x, chunk.len_y))
+                            SKBitmap part_image = new SKBitmap();
+
+                            //stackoverflow bros
+                            // pin the managed array so that the GC doesn't move it
+                            var gcHandle = GCHandle.Alloc(chunk.pixel_data, GCHandleType.Pinned);
+
+                            // install the pixels with the color type of the pixel data
+                            var infoa = new SKImageInfo(cut_width, cut_height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+                            part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, delegate { gcHandle.Free(); }, null);
+
+                            if (save_parts)
                             {
-                                //part_image.SaveAsPng("debug/testimg_"+a+"_"+b+".png");
+                                bitmp_list.Add(part_image);
+                            }
 
-                                if(save_parts)
+                            SKPaint part_paint = new SKPaint();
+                            // Blend modes are destructive to grayscale palettization
+                            if (!gDoGrayScale)
+                            {
+                                if ((chunk.flags & anp3_flag_enable_opacity) != 0)
                                 {
-                                    part_out_dir.Create();
-
-                                    part_image.SaveAsPng(Path.Combine(part_out_dir.FullName, fname + "_a_" + a + "_" + b + ".png"));
-                                }
-
-                                using (Image<Rgba32> copy_image = (Image<Rgba32>)part_image.Clone(c => c.Crop(new Rectangle(chunk.x, chunk.y, chunk.len_x, chunk.len_y))))
-                                {
-                                    if( (chunk.flags&anp3_flag_enable_scale)!=0 )
-                                    {
-                                        float mul_x = (float)chunk.scale_x / 100;
-                                        float mul_y = (float)chunk.scale_y / 100;
-
-                                        copy_image.Mutate(o => o.Resize((int)(copy_image.Width * mul_x), (int)(copy_image.Height * mul_y), KnownResamplers.NearestNeighbor));
-                                    }
-
-
-                                    copy_image.Mutate(o => o.Resize(copy_image.Width * 2, copy_image.Height * 2, KnownResamplers.NearestNeighbor));
-
-                                    if ((chunk.flags & anp3_flag_flip_x) != 0)
-                                    {
-                                        Console.WriteLine("flip x");
-                                        copy_image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                                    }
-                                    if ((chunk.flags & anp3_flag_flip_y) != 0)
-                                    {
-                                        copy_image.Mutate(o => o.Flip(FlipMode.Vertical));
-                                    }
-
-                                    if ((chunk.flags & anp3_flag_enable_rotate) != 0)
-                                    {
-                                        //degrees
-                                        float rot_angle = chunk.rot_angle / 11.33f;
-                                        //rot_angle = rot_angle * (3.14159265f / 180f);
-
-                                        
-                                        Vector2 origin = new Vector2( (chunk.len_x / 2), (chunk.len_y / 2) );
-
-                                        //Console.WriteLine("pre w " + copy_image.Width + " h " + copy_image.Height);
-                                        copy_image.Mutate(o =>
-                                        {
-                                            if (!(chunk.rot_axis_x == 0 && chunk.rot_axis_y == 0))
-                                            {
-                                                //there is a non-0 axis adjustment value
-                                                Console.WriteLine("!axis adjusted rotate!");
-
-                                                int o_width = copy_image.Width;
-                                                int o_height = copy_image.Height;
-
-                                                //give 256px offset lenience, signed byte, so +-128 potential
-                                                o.Pad(copy_image.Width + 512, copy_image.Height + 512);
-
-                                                int[] rect_param = new int[4];
-
-                                                int rot_axis_x = chunk.rot_axis_x * 4;
-                                                int rot_axis_y = chunk.rot_axis_y * 4;
-
-                                                if (rot_axis_x >= 0)
-                                                {
-                                                    rect_param[0] = 0; //x position offset
-                                                    rect_param[2] = rot_axis_x; //width offset
-                                                }
-                                                else if (rot_axis_x < 0)
-                                                {
-                                                    rect_param[0] = rot_axis_x; //x position offset
-                                                    rect_param[2] = Math.Abs(rot_axis_x); //width offset
-                                                }
-
-                                                if (rot_axis_y >= 0)
-                                                {
-                                                    rect_param[1] = 0; //y position offset
-                                                    rect_param[3] = rot_axis_y; //height offset
-                                                }
-                                                else if (rot_axis_y < 0)
-                                                {
-                                                    rect_param[1] = rot_axis_y; //x position offset
-                                                    rect_param[3] = Math.Abs(rot_axis_y); //height offset
-                                                }
-
-                                                Rectangle use_rect = new Rectangle(256 + rect_param[0], 256 + rect_param[1], o_width + rect_param[2], o_height + rect_param[3]);
-
-                                                Console.WriteLine(" padded size: " + copy_image.Width + " h " + copy_image.Height);
-                                                Console.WriteLine("offset value: x " + chunk.rot_axis_x + " y " + chunk.rot_axis_y);
-                                                Console.WriteLine(" crop rect dimensions: x " + use_rect.X + " y " + use_rect.Y + " uw " + use_rect.Width + " uh " + use_rect.Height);
-
-                                                o.Crop(use_rect);
-
-                                                //copy_image.SaveAsPng("debug/testimg_crop_" + a + "_" + b + ".png");
-
-
-                                                AffineTransformBuilder bld = new AffineTransformBuilder();
-                                                bld.AppendRotationDegrees(rot_angle);
-                                                bld.AppendTranslation(new PointF(rot_axis_x, rot_axis_y));
-
-                                                o.Pad(image.Width, image.Height);
-
-                                                o.Transform(bld, KnownResamplers.NearestNeighbor);
-                                            }
-                                            else
-                                            {
-                                                //no rotational axis adjustment
-                                                Console.WriteLine("normal rotate");
-                                                o.Rotate((float)chunk.rot_angle / 11.33f, KnownResamplers.NearestNeighbor);
-                                            }
-                                        });
-                                    }
-
-                                    int x_offset = image.Width / 2;
-                                    int y_offset = image.Height - 128;
-
-                                    image.Mutate(o => o.DrawImage(copy_image, new Point((-(copy_image.Width / 2)) + (chunk.paste_x * 2) + x_offset, (-(copy_image.Height / 2)) + (chunk.paste_y * 2) + y_offset), 1f));
-
+                                    //part_paint.BlendMode = SKBlendMode.Plus;
                                 }
                             }
 
-                            Console.WriteLine("check rect x" + chunk.x + " y " + chunk.y + " xlen " + chunk.len_x + " ylen " + chunk.len_y + " cflags " + chunk.flags + " check " + (chunk.flags & _flag_flip_x));
+                            canvas.Save();
+                            canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
+                            float prt_scl_x = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
+                            float prt_scl_y = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;
 
+                            //SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
+                            //SKPoint canvas_trans = new SKPoint(off_x - ((cut_width / 2)), off_y - ((cut_height / 2)));
+                            SKPoint canvas_trans = new SKPoint(off_x, off_y);
+                            SKPoint chunk_center = new SKPoint(chunk.len_x / 2, chunk.len_y / 2);
+
+                            canvas.Translate(canvas_trans.X, canvas_trans.Y);
+                            canvas.Translate(chunk.paste_x - (chunk.len_x/2), chunk.paste_y - (chunk.len_y / 2));
+
+                            if ((chunk.flags & anp3_flag_enable_scale) != 0) canvas.Scale(prt_scl_x, prt_scl_y, chunk_center.X, chunk_center.Y);
+                            if ((chunk.flags & anp3_flag_enable_rotate) != 0) canvas.RotateDegrees(chunk.rot_angle / 11.33f, chunk_center.X+chunk.rot_axis_x, chunk_center.Y+chunk.rot_axis_y);
+
+                            
+                            switch (chunk.flags & (anp3_flag_flip_x | anp3_flag_flip_y))
+                            {
+                                case anp3_flag_flip_x:
+                                    canvas.Scale(-1, 1, chunk_center.X, chunk_center.Y);
+                                    break;
+                                case anp3_flag_flip_y:
+                                    canvas.Scale(1, -1, chunk_center.X, chunk_center.Y);
+                                    break;
+                                case anp3_flag_flip_x | anp3_flag_flip_y:
+                                    canvas.Scale(-1, -1, chunk_center.X, chunk_center.Y);
+                                    break;
+                            }
+                            
+
+                            canvas.DrawBitmap(part_image, new SKPoint(0,0), part_paint);
+                            canvas.Restore();
+
+                            //Console.WriteLine("part " + g + " sprite " + nm);
                         }
 
-                        out_dir.Create();
+                        //Console.WriteLine("begin save " + b);
 
-                        //flippy endy
-                        image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                        image.SaveAsPng( Path.Combine(out_dir.FullName, fname + "_a_" + a + "_f_" + b +"_d_"+frame_duration+".png"));
+                        DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+
+                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+                        // save the data to a stream
+                        using (var image = surface.Snapshot())
+                        using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                        using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_" + a + "_f_"+b+ ".png")))
+                        {
+                            data.SaveTo(stream);
+                            //System.Environment.Exit(0);
+                        }
+
+                        if (save_parts)
+                        {
+                            for (int l = 0; l < bitmp_list.Count; l++)
+                            {
+                                //Console.WriteLine("svpart " + b);
+                                using (var data = bitmp_list[l].Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_a_" + a + "_f_" + b+"_p_"+ l + "_indx_" + chnk_sv + ".png")))
+                                {
+                                    // save the data to a stream
+                                    data.SaveTo(stream);
+                                }
+                            }
+                        }
 
                     }
+                    
+
                     idat_list.Clear();
 
                     anp3_file.BaseStream.Position = last_pos_anim+8;
-                    Console.WriteLine("return from anim to: 0x{0:X}", anp3_file.BaseStream.Position);
+                    //Console.WriteLine("return from anim to: 0x{0:X}", anp3_file.BaseStream.Position);
 
 
 
@@ -1215,40 +1300,18 @@ namespace d2_spritecomp
             //file.BaseStream.Position = tex_offset_1;
             Console.WriteLine("start reading sprite data at: 0x{0:X}", file.BaseStream.Position);
 
-
-            
-
-            
-
-            for(int i = 0; i < idat_list.Count; i++)
-            {
-
-            }
-
-            /*
-            for (int d = 0, f = 0, ck = 0, ck_len = 0; d < tex_length_1; d++, f += 2, ck_len++)
-            {
-                uint raw_byte = file.ReadByte();
-                uint pixel_1 = ((raw_byte & 0xF0) >> 4);
-                uint pixel_2 = (raw_byte & 0x0F);
-
-                pixel_data[f + 1] = (byte)pixel_1;
-                pixel_data[f] = (byte)pixel_2;
-            }
-            */
-
-
-
-
-            //idat_list.Reverse();
-            //image.Mutate(o => o.Opacity(0));
-
             Console.WriteLine("confirmed "+sprite_parts_list.Count+" spr");
+
+            out_dir.Create();
+            if (save_parts) part_out_dir.Create();
+            var info = new SKImageInfo(1024, 768);
+
+            int off_x = info.Width / 2;
+            int off_y = (info.Height / 2 + 128);
 
             for (int nm = 0, f = 0; nm < sprite_parts_list.Count; nm++)
             {
                 List<SKBitmap> bitmp_list = new List<SKBitmap>();
-                var info = new SKImageInfo(1024, 768);
                 using (var surface = SKSurface.Create(info))
                 {
                     SKCanvas canvas = surface.Canvas;
@@ -1292,7 +1355,7 @@ namespace d2_spritecomp
                         var infoa = new SKImageInfo(cut_width, cut_height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
                         part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, null, delegate { gcHandle.Free(); }, null);
 
-                        Console.WriteLine("check");
+                        //Console.WriteLine("check");
 
                         SKBitmap part_image_canvas = new SKBitmap(info.Width, info.Height);
                         SKCanvas part_canvas = new SKCanvas(part_image_canvas);
@@ -1301,10 +1364,6 @@ namespace d2_spritecomp
                         {
                             bitmp_list.Add(part_image);
                         }
-
-
-                        int off_x = info.Width / 2;
-                        int off_y = (info.Height / 2+128);
 
                         canvas.Save();
 
@@ -1342,26 +1401,18 @@ namespace d2_spritecomp
                         int paste_x_multi = 1;
                         int paste_y_multi = 1;
 
-                        //x multi flags
-                        if ( (chunk.flags & V103_flag_quadruple_x_offset)!=0 )
-                        {
-                            paste_x_multi = 4;
-                        }
-                        else
-                        if ((chunk.flags & V103_flag_double_x_offset) != 0)
-                        {
-                            paste_x_multi = 2;
-                        }
+                        int x_multiplier_flag = V103_flag_quadruple_x_offset | V103_flag_double_x_offset;
+                        int y_multiplier_flag = V103_flag_quadruple_y_offset | V103_flag_double_y_offset;
 
-                        //y multi flags
-                        if ( (chunk.flags & V103_flag_quadruple_y_offset)!=0 )
+                        // Apply multiplier flags
+                        if ((chunk.flags & x_multiplier_flag) != 0)
                         {
-                            paste_y_multi = 4;
+                            chunk.paste_x *= ((chunk.flags & V103_flag_quadruple_x_offset) != 0) ? 4 : 2;
                         }
-                        else
-                        if ((chunk.flags & V103_flag_double_y_offset) != 0)
+                        if ((chunk.flags & y_multiplier_flag) != 0)
                         {
-                            paste_y_multi = 2;
+                            chunk.paste_y *= ((chunk.flags & V103_flag_quadruple_y_offset) != 0) ? 4 : 2;
+
                         }
 
                         int paste_x = chunk.paste_x * paste_x_multi;
@@ -1384,8 +1435,6 @@ namespace d2_spritecomp
                         float use_flp_trans_y = ((chunk.flags & V103_flag_flip_y) != 0) ? canvas_trans.Y = (paste_y + (cut_height / 2) ) + off_y : canvas_trans.Y;
 
 
-                        
-
                         if ( (chunk.flags & V103_flag_flip_x | V103_flag_flip_y) !=0 )
                         {
                             canvas.Scale(use_scl_x, use_scl_y, use_flp_trans_x, use_flp_trans_y);
@@ -1406,8 +1455,6 @@ namespace d2_spritecomp
 
                     DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
 
-                    out_dir.Create();
-
                     string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
                     using (var image = surface.Snapshot())
@@ -1420,8 +1467,6 @@ namespace d2_spritecomp
 
                     if(save_parts)
                     {
-                        part_out_dir.Create();
-
                         for (int l = 0; l < bitmp_list.Count; l++)
                         {
                             Console.WriteLine("svpart " + f);
@@ -1435,20 +1480,10 @@ namespace d2_spritecomp
                     }
 
 
-
-                    //System.Environment.Exit(0);
-
-                    //image.SaveAsPng("out/fr_" + nm+".png");
                 }
 
                 
             }
-
-            //flippy endy
-            //image.Mutate(o => o.Flip(FlipMode.Horizontal));
-            //image.SaveAsPng("out/ani_" + a + "_fr_" + b + ".png");
-
-            //System.Environment.Exit(0);
         }
 
 
@@ -1757,7 +1792,7 @@ namespace d2_spritecomp
                         var infoa = new SKImageInfo(cut_width, cut_height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
                         part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, delegate { gcHandle.Free(); }, null);
 
-                        Console.WriteLine("check");
+                        //Console.WriteLine("check");
 
                         if (save_parts)
                         {

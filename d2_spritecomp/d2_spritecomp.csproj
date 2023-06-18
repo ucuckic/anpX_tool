@@ -15,7 +15,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.0.1" />
     <PackageReference Include="SkiaSharp" Version="2.88.3" />
   </ItemGroup>
 
