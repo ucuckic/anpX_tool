@@ -1,23 +1,29 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using SkiaSharp;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace d2_spritecomp
 {
     class Program
     {
-        //texture flags (second part/ first flags)
+        //texture flags (position address)
+        const int anp2_flag_enable_translation = 0x20;
+        const int anp2_flag_enable_scale = 0x40;
+        const int anp2_flag_unk = 0x80;
+
+        //texture flags (scale address, second in order)
+        const int anp2_flag_additive_blend = 0x10;
         const int anp2_flag_negative_blend = 0x20;
         const int anp2_flag_flip_x = 0x40;
         const int anp2_flag_flip_y = 0x80;
-
-        //more texture flags
-        const int anp2_flag_enable_rotation = 0x20;
 
         //anp3
 
@@ -64,6 +70,7 @@ namespace d2_spritecomp
 
         struct i_dat
         {
+            //mostly universal
             public int x;
             public int y;
             public int len_x;
@@ -73,13 +80,17 @@ namespace d2_spritecomp
             public int flags;
             public int flags_2;
             public int rot_angle;
-
-            //anp3
             public int use_palette;
-            public int rot_axis_x;
-            public int rot_axis_y;
             public int scale_x;
             public int scale_y;
+
+            //anp2
+            public int offset_x;
+            public int offset_y;
+
+            //anp3
+            public int rot_axis_x;
+            public int rot_axis_y;
             public byte[] pixel_data;
 
             //narikiri
@@ -217,23 +228,176 @@ namespace d2_spritecomp
             
         }
 
+        public struct tm2_sheet
+        {
+            public UInt32 data_size;
+            public byte pixel_format;
+
+            //possibly unneeded
+            public UInt16 buffer_paste_x;
+            public UInt16 buffer_paste_y;
+
+
+            public UInt16 width;
+            public UInt16 height;
+
+            public byte[] pixel_data;
+
+            public int exist_y;
+        }
+
         static void anp2_unpack(MemoryStream in_file, string in_path)
         {
+            List<tm2_sheet> palette_sheets = new List<tm2_sheet>();
+            List<tm2_sheet> texture_sheets = new List<tm2_sheet>();
+            int composite_height = 0;
+
+            byte[][] pals = new byte[0][];
+
+            //fuck it read all bytes
+            using (FileStream in_texture_stream = File.OpenRead(in_path))
+            {
+                using (BinaryReader tm2 = new BinaryReader(in_texture_stream))
+                {
+                    uint header_check = tm2.ReadUInt32();
+
+                    //TM2@
+                    if (header_check == 0x40324D54)
+                    {
+                        byte something = tm2.ReadByte();
+                        byte palette_count = tm2.ReadByte();
+                        byte chunk_count = tm2.ReadByte();
+                        tm2.BaseStream.Position = 0x10;
+
+                        pals = new byte[palette_count][];
+
+                        //treat the palette sheets just as the game would, presumably, just in case
+                        for (int i = 0; i < palette_count; i++)
+                        {
+                            tm2_sheet new_sheet = new tm2_sheet();
+
+
+                            new_sheet.data_size = tm2.ReadUInt32() - 0x10;
+
+                            new_sheet.pixel_format = tm2.ReadByte();
+                            tm2.ReadBytes(3);
+                            new_sheet.buffer_paste_x = tm2.ReadUInt16();
+                            new_sheet.buffer_paste_y = tm2.ReadUInt16();
+                            new_sheet.width = tm2.ReadUInt16();
+                            new_sheet.height = tm2.ReadUInt16();
+
+                            new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
+
+                            palette_sheets.Add(new_sheet);
+
+
+                            //unfuck palettes while we are here and create a proper palette array
+                            byte[] add_pal = new byte[256 * 4];
+                            for(int h = 0; h < add_pal.Length; h+=4)
+                            {
+                                add_pal[h] = (byte)(h / 4);
+                                add_pal[h+1] = (byte)(h/4);
+                                add_pal[h+2] = (byte)(h / 4);
+                                add_pal[h + 3] = 0xff;
+                            }
+
+                            new_sheet.pixel_data.CopyTo(add_pal,0);
+
+                            pals[i] = add_pal;
+
+                            palettes_out_dir.Create();
+                            File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "t_pal" + i + ".bin"), add_pal);
+
+                        }
+
+                        for (int i = 0; i < chunk_count; i++)
+                        {
+                            tm2_sheet new_sheet = new tm2_sheet();
+
+                            //where is this sheet on the total y axis
+                            new_sheet.exist_y = composite_height;
+
+                            new_sheet.data_size = tm2.ReadUInt32()-0x10;
+
+                            new_sheet.pixel_format = tm2.ReadByte();
+                            tm2.ReadBytes(3);
+                            new_sheet.buffer_paste_x = tm2.ReadUInt16();
+                            new_sheet.buffer_paste_y = tm2.ReadUInt16();
+                            new_sheet.width = tm2.ReadUInt16();
+                            new_sheet.height = tm2.ReadUInt16();
+
+                            //keep increasing the y position by the culminated sheet heights
+                            composite_height += new_sheet.height;
+
+                            switch (new_sheet.pixel_format)
+                            {
+                                case 19:
+                                    new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
+                                    break;
+                                case 20:
+                                    new_sheet.pixel_data = new byte[new_sheet.data_size*8];
+                                    for(int j = 0, k = 0; j < new_sheet.data_size; j++, k+=8)
+                                    {
+                                        byte raw_byte = tm2.ReadByte();
+                                        byte pixel1 = (byte)(raw_byte & 0x0F);
+                                        byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
+
+                                        /*
+                                        new_sheet.pixel_data[k + 0] = pixel1;
+                                        new_sheet.pixel_data[k + 1] = pixel2;
+                                        */
+
+                                        
+                                        //alpha
+                                        new_sheet.pixel_data[k + 7] = 0xff;
+
+                                        new_sheet.pixel_data[k + 6] = pixel2;
+                                        new_sheet.pixel_data[k + 5] = pixel2;
+                                        new_sheet.pixel_data[k + 4] = pixel2;
+
+                                        //alpha
+                                        new_sheet.pixel_data[k + 3] = 0xff;
+
+                                        new_sheet.pixel_data[k + 2] = pixel1;
+                                        new_sheet.pixel_data[k + 1] = pixel1;
+                                        new_sheet.pixel_data[k + 0] = pixel1;
+                                        
+                                        //pixel1 += (byte)(c_chunk.use_palette * 0x10);
+                                        //pixel2 += (byte)(c_chunk.use_palette * 0x10);
+                                    }
+
+                                    break;
+
+                            }
+
+                            texture_sheets.Add(new_sheet);
+
+                        }
+                    }
+                }
+            }
+
+
             using (BinaryReader chunk_dat = new BinaryReader(in_file))
             {
                 int chnk_sv = 0;
-                using var in_sheet = SKBitmap.Decode(in_path);
+
+                chunk_dat.BaseStream.Position = 4;
+
                 List<i_dat> idat_list = new List<i_dat>();
                 uint num_sprites = chunk_dat.ReadByte();
 
                 Console.WriteLine("num sprites: " + num_sprites);
                 //System.Environment.Exit(0);
 
+                DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+                string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
                 for (int h = 0; h < num_sprites; h++)
                 {
                     chunk_dat.BaseStream.Position = (0x10) + (h * 2);
 
-                    Console.WriteLine("actual current before read offset: 0x{0:X}", chunk_dat.BaseStream.Position + " hcnt " + h);
+                    Console.WriteLine("actual current before read offset: 0x{0:X}", chunk_dat.BaseStream.Position);
 
                     uint sprite_offset = chunk_dat.ReadUInt16();
                     Console.WriteLine("sprite offset: 0x{0:X}", sprite_offset);
@@ -264,55 +428,31 @@ namespace d2_spritecomp
 
                         chunk_dat.BaseStream.Position = sprite_part_data_offset;
 
-                        //rotate flag bit mask maybe
-                        int bit_mask = 0x1F;
-
-                        int bit_mask_y = 0xF8;
-                        int bit_mask_z = 0x0F;
-
                         Console.WriteLine("where am i: 0x{0:X}", chunk_dat.BaseStream.Position);
-
-                        //int tex_coord_pos = chunk_dat.ReadUInt16();
-
-                        //surely the length would never surpass a 256x page
-                        //int tex_coord_len = chunk_dat.ReadUInt16();
 
                         //cursed
 
-                        byte[] why = new byte[2];
-                        why[0] = chunk_dat.ReadByte();
+                        //texture cut position
+                        byte[] flag_buffer = new byte[2];
+                        flag_buffer[0] = chunk_dat.ReadByte(); //first byte is actually fine
 
-                        int help = chunk_dat.ReadByte();
-                        int tex_flags_2 = (help & bit_mask_y);
+                        int tex_pos_2 = chunk_dat.ReadByte(); //second byte, 3? bits are flags (what the fuck)
+                        int tex_flags = (tex_pos_2 & 0xE0); //mask out the lasts 5 bits
 
-                        help = (help & bit_mask);
+                        flag_buffer[1] = (byte)(tex_pos_2 & 0x1F); //only take the last five bits
 
-                        why[1] = (byte)help;
+                        int tex_coord_pos = BitConverter.ToInt16(flag_buffer);
 
-                        int d = why[0];
-                        d = d >> 5;
+                        //texture cut size
+                        flag_buffer[0] = chunk_dat.ReadByte(); //first byte is actually fine
 
+                        int tex_size_2 = chunk_dat.ReadByte(); //second byte, 4 bits are flags, 2 bits are the color palette, 2 bits are still size (what the fuck)
+                        int tex_flags_2 = (tex_size_2 & 0xF0); //mask out the lasts 2 bits
 
-                        //if ( d == 1 ) tex_flags_2 |= _flag_enable_rotation;
+                        flag_buffer[1] = (byte)(tex_size_2 & 3); //only take the last two bits
 
-                        int tex_coord_pos = BitConverter.ToInt16(why);
-
-
-                        why[0] = chunk_dat.ReadByte();
-
-                        help = chunk_dat.ReadByte();
-
-                        //sword palette flags unset
-                        help &= ~(1 << 3);
-                        help &= ~(1 << 2);
-
-                        int tex_flags = (help & bit_mask_y);
-
-                        help = (help & bit_mask_z);
-
-                        why[1] = (byte)help;
-
-                        int tex_coord_len = BitConverter.ToInt16(why);
+                        int tex_coord_len = BitConverter.ToInt16(flag_buffer);
+                        int part_use_palette = (tex_size_2 & 0xC)>>2;
 
                         //tex_coord_len &= ~(1 << 2);
                         //tex_coord_len &= ~(1 << 3);
@@ -325,10 +465,6 @@ namespace d2_spritecomp
 
                         int t_y = (tex_coord_pos / 32) * 8;
                         int t_x = (tex_coord_pos % 32) * 8;
-
-
-                        //int t_l_y = (tex_coord_len / 32) * 8;
-                        //int t_l_x = (tex_coord_len % 32) * 8;
 
                         int t_l_y = (tex_coord_len / 32) * 8;
                         int t_l_x = (tex_coord_len % 32) * 8;
@@ -345,16 +481,36 @@ namespace d2_spritecomp
                         add_dat.paste_y = y_offset;
                         add_dat.flags = tex_flags;
                         add_dat.flags_2 = tex_flags_2;
+                        add_dat.use_palette = part_use_palette;
 
-                        if ((tex_flags_2 & anp2_flag_enable_rotation) != 0)
+
+
+
+                        //dynamic struct size for transforms
+                        switch(tex_flags&(anp2_flag_enable_translation|anp2_flag_enable_scale))
                         {
-                            chunk_dat.BaseStream.Position += 2;
+                            case anp2_flag_enable_translation: //translate/rotate
+                                Console.WriteLine("rot");
 
-                            Console.WriteLine("read rot at " + chunk_dat.BaseStream.Position);
+                                add_dat.offset_x = chunk_dat.ReadByte();
+                                add_dat.offset_y = chunk_dat.ReadByte();
+                                add_dat.rot_angle = chunk_dat.ReadInt16();
+                                break;
+                            case anp2_flag_enable_scale: //scale
+                                Console.WriteLine("scl");
 
-                            add_dat.rot_angle = chunk_dat.ReadInt16();
+                                add_dat.scale_x = chunk_dat.ReadInt16();
+                                add_dat.scale_y = chunk_dat.ReadInt16();
+                                break;
+                            case anp2_flag_enable_scale | anp2_flag_enable_translation: //both
+                                Console.WriteLine("double trans");
 
-                            Console.WriteLine("rot val confirmed " + add_dat.rot_angle);
+                                add_dat.offset_x = chunk_dat.ReadByte(); //doing everything right in a row is surprisingly sane
+                                add_dat.offset_y = chunk_dat.ReadByte();
+                                add_dat.rot_angle = chunk_dat.ReadInt16();
+                                add_dat.scale_x = chunk_dat.ReadInt16();
+                                add_dat.scale_y = chunk_dat.ReadInt16();
+                                break;
                         }
 
 
@@ -380,12 +536,127 @@ namespace d2_spritecomp
                         {
                             i_dat chunk = idat_list[g];
 
-                            if (chunk.len_x > in_sheet.Width) continue;
-                            if (chunk.len_y > in_sheet.Height) continue;
-                            if (chunk.x > in_sheet.Width) continue;
-                            if (chunk.y > in_sheet.Height) continue;
-                            if (chunk.y + chunk.len_y > in_sheet.Height) continue;
-                            if (chunk.x + chunk.len_x > in_sheet.Height) continue;
+                            SKBitmap in_sheet = new SKBitmap();
+                            SKBitmap out_part = new SKBitmap();
+                            if (texture_sheets.Count() == 0)
+                            {
+                                in_sheet = SKBitmap.Decode(in_path);
+                                if (chunk.len_x > in_sheet.Width) continue;
+                                if (chunk.len_y > in_sheet.Height) continue;
+                                if (chunk.x > in_sheet.Width) continue;
+                                if (chunk.y > in_sheet.Height) continue;
+                                if (chunk.y + chunk.len_y > in_sheet.Height) continue;
+                                if (chunk.x + chunk.len_x > in_sheet.Height) continue;
+                            }
+                            else
+                            {
+                                if (chunk.y > composite_height)
+                                {
+                                    continue;
+                                }
+
+                                int use_sheet = 0;
+                                for(int i = 0; i < texture_sheets.Count(); i++)
+                                {
+                                    tm2_sheet c_sheet = texture_sheets[i];
+
+                                    if( chunk.y >= c_sheet.exist_y )
+                                    {
+                                        Console.WriteLine("cy >= "+c_sheet.exist_y+" csheet height "+c_sheet.height);
+                                        if(chunk.y < (c_sheet.exist_y+c_sheet.height))
+                                        {
+                                            use_sheet = i;
+                                            chunk.y -= c_sheet.exist_y;
+
+                                            Console.WriteLine("set sheet: exy "+ c_sheet.exist_y+" chky "+chunk.y);
+                                        }
+                                    }
+                                }
+
+
+                                var gcHandle = GCHandle.Alloc(texture_sheets[use_sheet].pixel_data, GCHandleType.Pinned);
+
+                                // install the pixels with the color type of the pixel data
+                                var img_info = new SKImageInfo(texture_sheets[use_sheet].width, texture_sheets[use_sheet].height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+                                in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+
+
+                                if (!in_sheet.ExtractSubset(out_part, new SKRectI(chunk.x, chunk.y, chunk.x + chunk.len_x, chunk.y + chunk.len_y)))
+                                {
+                                    Console.WriteLine("failed to grab subset: x "+chunk.x+" y "+chunk.y);
+                                    System.Environment.Exit(0);
+                                }
+
+                                byte[] opb = out_part.Bytes;
+                                for (int p = 0; p < out_part.ByteCount; p +=4)
+                                {
+                                    byte px_clr_r = opb[p];
+
+                                    opb[p+0] = pals[chunk.use_palette][(px_clr_r * 4) + 0];
+                                    opb[p+1] = pals[chunk.use_palette][(px_clr_r * 4) + 1];
+                                    opb[p+2] = pals[chunk.use_palette][(px_clr_r * 4) + 2];
+
+                                    int use_al = (pals[chunk.use_palette][(px_clr_r * 4) + 3] * 2 > 255) ? 255 : pals[chunk.use_palette][(px_clr_r * 4) + 3] * 2;
+                                    opb[p+3] = (byte)use_al;
+                                }
+
+                                var partgcHandle = GCHandle.Alloc(opb, GCHandleType.Pinned);
+                                out_part.InstallPixels(out_part.Info, partgcHandle.AddrOfPinnedObject(), out_part.RowBytes, delegate { partgcHandle.Free(); }, null);
+
+                                if (save_parts)
+                                {
+                                    //Console.WriteLine("svpart " + b);
+                                    using (var data = out_part.Encode(SKEncodedImageFormat.Png, 100))
+                                    using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_spr_"+h+"_part_"+g+".png")))
+                                    {
+                                        // save the data to a stream
+                                        data.SaveTo(stream);
+                                    }
+                                    
+                                }
+
+
+
+                                //should work but doesnt for literally no reason
+                                /*
+                                unsafe
+                                {
+                                    
+                                    for (int p = 0; p < out_part.ByteCount; p +=4)
+                                    {
+                                        IntPtr pixel_data = out_part.GetPixels();
+                                        byte* ptr = (byte*)pixel_data.ToPointer()+p;
+
+                                        byte px_clr_r = *(ptr+0);
+                                        byte px_clr_g = *(ptr+1);
+                                        byte px_clr_b = *(ptr+2);
+                                        byte px_clr_a = *(ptr+3);
+
+                                        //Console.Write(" rgb "+ px_clr_r+" "+ px_clr_g+" "+ px_clr_b+" "+ px_clr_a);
+
+                                        *(ptr+0) = pals[chunk.use_palette][(px_clr_r * 4) + 0];
+                                        *(ptr+1) = pals[chunk.use_palette][(px_clr_r * 4) + 1];
+                                        *(ptr+2) = pals[chunk.use_palette][(px_clr_r * 4) + 2];
+
+
+                                        //*(ptr+3) = pals[0][(px_clr * 4) + 3];
+
+
+                                    }
+
+                                }
+                                */
+
+                                /*
+                                //Console.WriteLine("svpart " + b);
+                                using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, "p_test" + h+" use_sheet "+use_sheet+".png")))
+                                {
+                                    // save the data to a stream
+                                    data.SaveTo(stream);
+                                }
+                                */
+                            }
 
 
                             int cut_width = chunk.len_x;
@@ -395,17 +666,21 @@ namespace d2_spritecomp
                             // Blend modes are destructive to grayscale palettization
                             if (!gDoGrayScale)
                             {
-                                if ((chunk.flags & anp3_flag_enable_opacity) != 0)
+                                if ((chunk.flags_2 & anp2_flag_additive_blend) != 0)
                                 {
-                                    //part_paint.BlendMode = SKBlendMode.Plus;
+                                    part_paint.BlendMode = SKBlendMode.Plus;
+                                }
+                                else if ((chunk.flags_2 & anp2_flag_negative_blend) != 0)
+                                {
+                                    part_paint.BlendMode = SKBlendMode.DstATop;
                                 }
                             }
 
                             canvas.Save();
                             canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
-                            float prt_scl_x = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
-                            float prt_scl_y = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;
+                            float prt_scl_x = ((chunk.flags & anp2_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
+                            float prt_scl_y = ((chunk.flags & anp2_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;
 
                             //SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
                             //SKPoint canvas_trans = new SKPoint(off_x - ((cut_width / 2)), off_y - ((cut_height / 2)));
@@ -416,17 +691,15 @@ namespace d2_spritecomp
                             canvas.Translate(chunk.paste_x - (chunk.len_x / 2), chunk.paste_y - (chunk.len_y / 2));
 
 
-                            //if ((chunk.flags_2 & anp3_flag_enable_scale) != 0) canvas.Scale(prt_scl_x, prt_scl_y, chunk_center.X, chunk_center.Y);
 
-
-
-                            if ((chunk.flags_2 & anp2_flag_enable_rotation) != 0)
+                            if ((chunk.flags & anp2_flag_enable_translation) != 0)
                             {
                                 canvas.RotateDegrees(chunk.rot_angle / 11.33f, chunk_center.X + chunk.rot_axis_x, chunk_center.Y + chunk.rot_axis_y);
+                                canvas.Translate(chunk.offset_x,chunk.offset_y);
                             }
 
 
-                            switch (chunk.flags & (anp2_flag_flip_x | anp2_flag_flip_y))
+                            switch (chunk.flags_2 & (anp2_flag_flip_x | anp2_flag_flip_y))
                             {
                                 case anp2_flag_flip_x:
                                     canvas.Scale(-1, 1, chunk_center.X, chunk_center.Y);
@@ -442,18 +715,17 @@ namespace d2_spritecomp
 
                             Console.WriteLine("cx " + chunk.x + " cy " + chunk.y);
 
-                            canvas.DrawBitmap(in_sheet, new SKRect(chunk.x, chunk.y, chunk.x + chunk.len_x, chunk.y + chunk.len_y), new SKRect(0, 0, chunk.len_x, chunk.len_y), part_paint);
+                            canvas.DrawBitmap(out_part, new SKRect(0, 0, chunk.len_x, chunk.len_y), part_paint);
                             //canvas.DrawBitmap(in_sheet, new SKPoint(0, 0));
                             canvas.Restore();
+
+                            in_sheet.Dispose();
+                            out_part.Dispose();
 
                             //Console.WriteLine("part " + g + " sprite " + nm);
                         }
 
                         //Console.WriteLine("begin save " + b);
-
-                        DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
-
-                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
                         // save the data to a stream
                         using (var image = surface.Snapshot())
@@ -482,69 +754,6 @@ namespace d2_spritecomp
 
 
                     idat_list.Clear();
-                    /*
-                    using (Image<Rgba32> image = new(512, 512))
-                    {
-                        string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
-                        //image.Mutate(o => o.Opacity(0));
-                        //foreach (i_dat chunk in idat_list)
-                        for(int ch = 0; ch < idat_list.Count(); ch++)
-                        {
-                            i_dat chunk = idat_list[ch];
-
-
-                            if (chunk.len_x > in_sheet.Width) continue;
-                            if (chunk.len_y > in_sheet.Height) continue;
-                            if (chunk.x > in_sheet.Width) continue;
-                            if (chunk.y > in_sheet.Height) continue;
-                            if (chunk.y + chunk.len_y > in_sheet.Height) continue;
-                            if (chunk.x + chunk.len_x > in_sheet.Height) continue;
-
-                            Console.WriteLine("check rect x" + chunk.x + " y " + chunk.y + " xlen " + chunk.len_x + " ylen " + chunk.len_y + " cflags " + chunk.flags + " check " + (chunk.flags & _flag_flip_x));
-
-                            using (Image<Rgba32> copy_image = (Image<Rgba32>)in_sheet.Clone(c => c.Crop(new Rectangle(chunk.x, chunk.y, chunk.len_x, chunk.len_y))))
-                            {
-                                if (save_parts)
-                                {
-                                    part_out_dir.Create();
-
-                                    copy_image.SaveAsPng(Path.Combine(part_out_dir.FullName, fname + "_a_" + h + "_" + ch + ".png"));
-                                }
-
-                                copy_image.Mutate(o => o.Resize(copy_image.Width * 2, copy_image.Height * 2, KnownResamplers.NearestNeighbor));
-
-                                if ((chunk.flags & _flag_flip_x) != 0)
-                                {
-                                    Console.WriteLine("flip x");
-                                    copy_image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                                }
-                                if ((chunk.flags & _flag_flip_y) != 0)
-                                {
-                                    copy_image.Mutate(o => o.Flip(FlipMode.Vertical));
-                                }
-
-                                if ((chunk.flags_2 & _flag_enable_rotation) != 0)
-                                {
-                                    AffineTransformBuilder bld = new AffineTransformBuilder();
-                                    Vector2 origin = new Vector2(+(chunk.len_x / 2), (chunk.len_y / 2));
-
-                                    copy_image.Mutate(o => o.Rotate((float)chunk.rot_angle / 11.33f, KnownResamplers.NearestNeighbor));
-                                }
-
-                                image.Mutate(o => o.DrawImage(copy_image, new Point((-(copy_image.Width / 2)) + (chunk.paste_x * 2) + 256, (-(copy_image.Height / 2)) + (chunk.paste_y * 2) + 256), 1f));
-
-                            }
-                        }
-
-                        out_dir.Create();
-
-                        //flippy endy
-                        image.Mutate(o => o.Flip(FlipMode.Horizontal));
-                        image.SaveAsPng(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png"));
-
-                    }
-                    idat_list.Clear();
-                    */
                 }
             }
         }
@@ -1169,79 +1378,14 @@ namespace d2_spritecomp
                             DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
 
                             string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+                            string write_path = Path.Combine(out_dir.FullName, fname + "_a_" + a + "_f_" + b + "_d_" + frame_duration);
 
-                            if(gDoGrayScale)
+                            if (gDoGrayScale)
                             {
                                 //make a whole fucking bitmap
-                                using (var stream_bitmap = File.Create(Path.Combine(out_dir.FullName, fname + "_" + a + "_f_" + b + ".bmp")))
+                                using (var image = surface.Snapshot() )
                                 {
-                                    using (BinaryWriter bitmap = new BinaryWriter(stream_bitmap))
-                                    {
-                                        unsafe
-                                        {
-                                            using (var image = surface.Snapshot())
-                                            {
-                                                UInt16 bitmap_header = 0x4D42;
-                                                uint bitmap_size = 0;
-
-                                                //should just be this every time, fixed header after all with fixed palette size
-                                                uint data_offset = 0x436;
-
-                                                bitmap.Write(bitmap_header);
-                                                bitmap.Write(bitmap_size);
-                                                bitmap.Write(new byte[4]);
-                                                bitmap.Write(data_offset);
-
-                                                uint core_header_size = 0x28;
-
-                                                int bitmap_width = image.Width;
-                                                int bitmap_height = image.Height;
-                                                UInt16 cplanes = 1;
-                                                UInt16 bitmap_bpp = 8;
-                                                uint compression = 0;
-                                                uint data_size = 0;
-                                                uint ppm_x = 0;
-                                                uint ppm_y = 0;
-
-                                                uint color_count = 0;
-                                                uint important_color = 0;
-
-                                                bitmap.Write(core_header_size);
-                                                bitmap.Write(bitmap_width);
-                                                bitmap.Write(bitmap_height);
-                                                bitmap.Write(cplanes);
-                                                bitmap.Write(bitmap_bpp);
-                                                bitmap.Write(compression);
-                                                bitmap.Write(data_size);
-                                                bitmap.Write(ppm_x);
-                                                bitmap.Write(ppm_y);
-
-                                                bitmap.Write(color_count);
-                                                bitmap.Write(important_color);
-
-                                                //palette data here
-
-                                                bitmap.Write(composite_palette);
-
-                                                //bitmap pixel data
-
-                                                SKPixmap image_data = image.PeekPixels();
-
-
-                                                for (int p = 0; p < image_data.BytesSize; p += 4)
-                                                {
-
-                                                    IntPtr pixel_data = image_data.GetPixels()+p;
-                                                    byte* ptr = (byte*)pixel_data.ToPointer();
-
-                                                    bitmap.Write(*ptr);
-                                                }
-
-                                                //gcHandle.Free();
-                                            }
-                                        }
-
-                                    }
+                                    image.SaveBitmap(write_path + ".bmp", composite_palette);
                                 }
                             }
                             else
@@ -1249,7 +1393,7 @@ namespace d2_spritecomp
                                 // save the data to a stream
                                 using (var image = surface.Snapshot())
                                 using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
-                                using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_a_" + a + "_f_" + b + "_d_"+frame_duration+".png")))
+                                using (var stream = File.OpenWrite(write_path + ".png"))
                                 {
                                     data.SaveTo(stream);
                                     //System.Environment.Exit(0);
@@ -1612,7 +1756,7 @@ namespace d2_spritecomp
 
                             // install the pixels with the color type of the pixel data
                             var infoa = new SKImageInfo(cut_width, cut_height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
-                            part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, null, delegate { gcHandle.Free(); }, null);
+                            part_image.InstallPixels(infoa, gcHandle.AddrOfPinnedObject(), infoa.RowBytes, delegate { gcHandle.Free(); }, null);
 
                             //Console.WriteLine("check");
 
