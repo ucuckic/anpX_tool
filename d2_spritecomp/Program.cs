@@ -367,12 +367,15 @@ namespace d2_spritecomp
                                     new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
                                     break;
                                 case 20:
-                                    new_sheet.pixel_data = new byte[new_sheet.data_size*8];
+                                    new_sheet.pixel_data = new byte[ (new_sheet.data_size*8)+1024 ];
 
                                     long s_pos = tm2.BaseStream.Position;
+
+                                    Console.WriteLine("spos "+s_pos);
+
                                     if(tm2_type == 0x23)
                                     {
-                                        for (int j = 0, k = 0; j < ( (new_sheet.width*new_sheet.height)/256 ); j++)
+                                        for (int j = 1, k = 0; j < ( (new_sheet.width*new_sheet.height)/256 )+1; j++)
                                         {
                                             int div = j / 8;
                                             int cnk_div = (j % 8) * 16;
@@ -381,11 +384,24 @@ namespace d2_spritecomp
                                             {
                                                 for (int px_x = 0; px_x < 16; px_x++, k += 8)
                                                 {
-
                                                     byte raw_byte = tm2.ReadByte();
                                                     byte pixel1 = (byte)(raw_byte & 0x0F);
                                                     byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
 
+                          
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 7] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 6] = 0;
+                                                    new_sheet.pixel_data[k + 5] = 0xff;
+                                                    new_sheet.pixel_data[k + 4] = 0;
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 2] = 0;
+                                                    new_sheet.pixel_data[k + 1] = 0xff;
+                                                    new_sheet.pixel_data[k + 0] = 0;
 
                                                     //alpha
                                                     new_sheet.pixel_data[k + 7] = 0xff;
@@ -400,6 +416,9 @@ namespace d2_spritecomp
                                                     new_sheet.pixel_data[k + 2] = pixel1;
                                                     new_sheet.pixel_data[k + 1] = pixel1;
                                                     new_sheet.pixel_data[k + 0] = pixel1;
+                                                    
+
+
                                                 }
 
                                                 tm2.BaseStream.Position += (new_sheet.width / 2)-16;
@@ -409,6 +428,7 @@ namespace d2_spritecomp
                                             //Console.WriteLine("seek "+tm2.BaseStream.Position+" div "+div);
                                         }
 
+                                        //s_pos -= 128;
                                         tm2.BaseStream.Position = s_pos + new_sheet.data_size;
                                     }
                                     else
