@@ -7,6 +7,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Xml.Linq;
 using SkiaSharp;
 using static System.Net.Mime.MediaTypeNames;
 
@@ -14,6 +15,9 @@ namespace d2_spritecomp
 {
     class Program
     {
+        //mom would not be proud of this one
+        public static byte[] lazy_mspal_header = new byte[]{ 0x52, 0x49, 0x46, 0x46, 0x10, 0x04, 0x00, 0x00, 0x50, 0x41, 0x4C, 0x20, 0x64, 0x61, 0x74, 0x61, 0x04, 0x04, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01 };
+
         //texture flags (position address)
         const int anp2_flag_enable_translation = 0x20;
         const int anp2_flag_enable_scale = 0x40;
@@ -199,6 +203,7 @@ namespace d2_spritecomp
                     }
                 }
 
+
                 in_dir = new DirectoryInfo(og_in_path);
                 switch (anp_string)
                 {
@@ -248,22 +253,30 @@ namespace d2_spritecomp
 
         static void anp2_unpack(MemoryStream in_file, string in_path)
         {
+
+            DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+            string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
             List<tm2_sheet> palette_sheets = new List<tm2_sheet>();
             List<tm2_sheet> texture_sheets = new List<tm2_sheet>();
             int composite_height = 0;
 
             byte[][] pals = new byte[0][];
+            byte[] consolidated_pal = new byte[256 * 4];
 
             //fuck it read all bytes
             using (FileStream in_texture_stream = File.OpenRead(in_path))
             {
                 using (BinaryReader tm2 = new BinaryReader(in_texture_stream))
                 {
-                    uint header_check = tm2.ReadUInt32();
+                    byte[] header_check = tm2.ReadBytes(3);
+                    
 
-                    //TM2@
-                    if (header_check == 0x40324D54)
+                    //TM2
+                    if (header_check.SequenceEqual(new byte[] { 0x54,0x4D,0x32 }))
                     {
+                        byte tm2_type = tm2.ReadByte();
+
                         byte something = tm2.ReadByte();
                         byte palette_count = tm2.ReadByte();
                         byte chunk_count = tm2.ReadByte();
@@ -303,11 +316,30 @@ namespace d2_spritecomp
 
                             new_sheet.pixel_data.CopyTo(add_pal,0);
 
+                            if(i < 0x10)
+                            {
+                                new_sheet.pixel_data.CopyTo(consolidated_pal, i * 0x40);
+                            }
+
                             pals[i] = add_pal;
 
                             palettes_out_dir.Create();
-                            File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "t_pal" + i + ".bin"), add_pal);
+                            using(FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "t_pal" + i + ".pal")))
+                            {
+                                writecolor.Write(lazy_mspal_header);
+                                writecolor.Write(add_pal);
+                            }
 
+                        }
+
+                        for (int g = 0; g < consolidated_pal.Length; g += 4)
+                        {
+                            //reverse the color palette for bmp export
+
+                            byte[] buffer = new byte[3];
+                            Array.ConstrainedCopy(consolidated_pal, g, buffer, 0, 3);
+                            Array.Reverse(buffer);
+                            Array.ConstrainedCopy(buffer, 0, consolidated_pal, g, 3);
                         }
 
                         for (int i = 0; i < chunk_count; i++)
@@ -336,35 +368,74 @@ namespace d2_spritecomp
                                     break;
                                 case 20:
                                     new_sheet.pixel_data = new byte[new_sheet.data_size*8];
-                                    for(int j = 0, k = 0; j < new_sheet.data_size; j++, k+=8)
+
+                                    long s_pos = tm2.BaseStream.Position;
+                                    if(tm2_type == 0x23)
                                     {
-                                        byte raw_byte = tm2.ReadByte();
-                                        byte pixel1 = (byte)(raw_byte & 0x0F);
-                                        byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
+                                        for (int j = 0, k = 0; j < ( (new_sheet.width*new_sheet.height)/256 ); j++)
+                                        {
+                                            int div = j / 8;
+                                            int cnk_div = (j % 8) * 16;
 
-                                        /*
-                                        new_sheet.pixel_data[k + 0] = pixel1;
-                                        new_sheet.pixel_data[k + 1] = pixel2;
-                                        */
+                                            for (int px_y = 0; px_y < 8; px_y++)
+                                            {
+                                                for (int px_x = 0; px_x < 16; px_x++, k += 8)
+                                                {
 
-                                        
-                                        //alpha
-                                        new_sheet.pixel_data[k + 7] = 0xff;
+                                                    byte raw_byte = tm2.ReadByte();
+                                                    byte pixel1 = (byte)(raw_byte & 0x0F);
+                                                    byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
 
-                                        new_sheet.pixel_data[k + 6] = pixel2;
-                                        new_sheet.pixel_data[k + 5] = pixel2;
-                                        new_sheet.pixel_data[k + 4] = pixel2;
 
-                                        //alpha
-                                        new_sheet.pixel_data[k + 3] = 0xff;
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 7] = 0xff;
 
-                                        new_sheet.pixel_data[k + 2] = pixel1;
-                                        new_sheet.pixel_data[k + 1] = pixel1;
-                                        new_sheet.pixel_data[k + 0] = pixel1;
-                                        
-                                        //pixel1 += (byte)(c_chunk.use_palette * 0x10);
-                                        //pixel2 += (byte)(c_chunk.use_palette * 0x10);
+                                                    new_sheet.pixel_data[k + 6] = pixel2;
+                                                    new_sheet.pixel_data[k + 5] = pixel2;
+                                                    new_sheet.pixel_data[k + 4] = pixel2;
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 2] = pixel1;
+                                                    new_sheet.pixel_data[k + 1] = pixel1;
+                                                    new_sheet.pixel_data[k + 0] = pixel1;
+                                                }
+
+                                                tm2.BaseStream.Position += (new_sheet.width / 2)-16;
+                                            }
+
+                                            tm2.BaseStream.Position = s_pos + cnk_div + (div * 0x400);
+                                            //Console.WriteLine("seek "+tm2.BaseStream.Position+" div "+div);
+                                        }
+
+                                        tm2.BaseStream.Position = s_pos + new_sheet.data_size;
                                     }
+                                    else
+                                    {
+                                        for (int j = 0, k = 0; j < new_sheet.data_size; j++, k += 8)
+                                        {
+                                            byte raw_byte = tm2.ReadByte();
+                                            byte pixel1 = (byte)(raw_byte & 0x0F);
+                                            byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
+
+
+                                            //alpha
+                                            new_sheet.pixel_data[k + 7] = 0xff;
+
+                                            new_sheet.pixel_data[k + 6] = pixel2;
+                                            new_sheet.pixel_data[k + 5] = pixel2;
+                                            new_sheet.pixel_data[k + 4] = pixel2;
+
+                                            //alpha
+                                            new_sheet.pixel_data[k + 3] = 0xff;
+
+                                            new_sheet.pixel_data[k + 2] = pixel1;
+                                            new_sheet.pixel_data[k + 1] = pixel1;
+                                            new_sheet.pixel_data[k + 0] = pixel1;
+                                        }
+                                    }
+
 
                                     break;
 
@@ -372,6 +443,37 @@ namespace d2_spritecomp
 
                             texture_sheets.Add(new_sheet);
 
+                            if (save_parts)
+                            {
+                                if (save_parts) part_out_dir.Create();
+                                using (SKBitmap in_sheet = new SKBitmap())
+                                {
+                                    byte[] flip_data = new_sheet.pixel_data;
+                                    //Array.Reverse(flip_data);
+
+                                    var gcHandle = GCHandle.Alloc(flip_data, GCHandleType.Pinned);
+
+                                    // install the pixels with the color type of the pixel data
+                                    var img_info = new SKImageInfo(new_sheet.width, new_sheet.height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+                                    in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+
+                                    if(gDoGrayScale)
+                                    {
+                                        SKImage.FromBitmap(in_sheet).SaveBitmap(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".bmp"),consolidated_pal,true);
+                                    }
+                                    else
+                                    {
+                                        //Console.WriteLine("svpart " + b);
+                                        using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
+                                        using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png")))
+                                        {
+                                            // save the data to a stream
+                                            data.SaveTo(stream);
+                                        }
+                                    }
+
+                                }
+                            }
                         }
                     }
                 }
@@ -389,9 +491,6 @@ namespace d2_spritecomp
 
                 Console.WriteLine("num sprites: " + num_sprites);
                 //System.Environment.Exit(0);
-
-                DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
-                string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
                 for (int h = 0; h < num_sprites; h++)
                 {
@@ -520,7 +619,7 @@ namespace d2_spritecomp
                     }
 
                     out_dir.Create();
-                    if (save_parts) part_out_dir.Create();
+                    //if (save_parts) part_out_dir.Create();
 
                     var info = new SKImageInfo(512, 512);
                     int off_x = info.Width / 2;
@@ -562,8 +661,9 @@ namespace d2_spritecomp
 
                                     if( chunk.y >= c_sheet.exist_y )
                                     {
-                                        Console.WriteLine("cy >= "+c_sheet.exist_y+" csheet height "+c_sheet.height);
-                                        if(chunk.y < (c_sheet.exist_y+c_sheet.height))
+                                        Console.WriteLine("cy >= "+c_sheet.exist_y+" csheet height "+c_sheet.height+" sel "+use_sheet);
+                                        Console.WriteLine("chunky "+chunk.y+" num sheets "+texture_sheets.Count());
+                                        if (chunk.y < (c_sheet.exist_y+c_sheet.height))
                                         {
                                             use_sheet = i;
                                             chunk.y -= c_sheet.exist_y;
@@ -586,22 +686,59 @@ namespace d2_spritecomp
                                     Console.WriteLine("failed to grab subset: x "+chunk.x+" y "+chunk.y);
                                     System.Environment.Exit(0);
                                 }
-
+                                
                                 byte[] opb = out_part.Bytes;
                                 for (int p = 0; p < out_part.ByteCount; p +=4)
                                 {
                                     byte px_clr_r = opb[p];
-
-                                    opb[p+0] = pals[chunk.use_palette][(px_clr_r * 4) + 0];
-                                    opb[p+1] = pals[chunk.use_palette][(px_clr_r * 4) + 1];
-                                    opb[p+2] = pals[chunk.use_palette][(px_clr_r * 4) + 2];
-
                                     int use_al = (pals[chunk.use_palette][(px_clr_r * 4) + 3] * 2 > 255) ? 255 : pals[chunk.use_palette][(px_clr_r * 4) + 3] * 2;
-                                    opb[p+3] = (byte)use_al;
+
+                                    if (gDoGrayScale)
+                                    {
+                                        px_clr_r += (byte)(0x10 * chunk.use_palette);
+                                        opb[p + 0] = px_clr_r;
+                                        opb[p + 1] = px_clr_r;
+                                        opb[p + 2] = px_clr_r;
+                                    }
+                                    else
+                                    {
+                                        opb[p + 0] = pals[chunk.use_palette][(px_clr_r * 4) + 0];
+                                        opb[p + 1] = pals[chunk.use_palette][(px_clr_r * 4) + 1];
+                                        opb[p + 2] = pals[chunk.use_palette][(px_clr_r * 4) + 2];
+                                    }
+
+
+                                    opb[p + 3] = (byte)use_al;
                                 }
 
                                 var partgcHandle = GCHandle.Alloc(opb, GCHandleType.Pinned);
                                 out_part.InstallPixels(out_part.Info, partgcHandle.AddrOfPinnedObject(), out_part.RowBytes, delegate { partgcHandle.Free(); }, null);
+
+                                
+                                /*
+                                unsafe
+                                {
+
+                                    for (int p = 0; p < out_part.ByteCount; p += 4)
+                                    {
+
+                                        IntPtr pixel_data = out_part.GetPixels();
+                                        byte* ptr = (byte*)pixel_data.ToPointer();
+
+                                        //Console.Write(" rgb "+ px_clr_r+" "+ px_clr_g+" "+ px_clr_b+" "+ px_clr_a);
+
+                                        *(ptr + 0+p) = pals[0][(*(ptr + 0+p) * 4) + 0];
+                                        *(ptr + 1+p) = pals[0][(*(ptr + 0+p) * 4) + 1];
+                                        *(ptr + 2+p) = pals[0][(*(ptr + 0+p) * 4) + 2];
+
+
+                                        //*(ptr+3) = pals[0][(px_clr * 4) + 3];
+
+
+                                    }
+
+                                }
+                                */
 
                                 if (save_parts)
                                 {
@@ -678,6 +815,7 @@ namespace d2_spritecomp
 
                             canvas.Save();
                             canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                            if(gDoGrayScale) canvas.Scale(1, -1, info.Width / 2, info.Height / 2);
 
                             float prt_scl_x = ((chunk.flags & anp2_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
                             float prt_scl_y = ((chunk.flags & anp2_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;
@@ -728,13 +866,24 @@ namespace d2_spritecomp
                         //Console.WriteLine("begin save " + b);
 
                         // save the data to a stream
-                        using (var image = surface.Snapshot())
-                        using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
-                        using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png")))
+
+                        if(gDoGrayScale)
                         {
-                            data.SaveTo(stream);
-                            //System.Environment.Exit(0);
+                            //consolidated_pal
+                            surface.Snapshot().SaveBitmap(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".bmp"), consolidated_pal);
+
                         }
+                        else
+                        {
+                            using (var image = surface.Snapshot())
+                            using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                            using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png")))
+                            {
+                                data.SaveTo(stream);
+                                //System.Environment.Exit(0);
+                            }
+                        }
+
                         /*
                         if (save_parts)
                         {
@@ -1326,16 +1475,11 @@ namespace d2_spritecomp
                                 }
 
                                 canvas.Save();
+                                canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
 
-                                if(gDoGrayScale)
-                                {
-                                    canvas.Scale(-2.0f, -2.0f, info.Width / 2, info.Height / 2);
-                                }
-                                else
-                                {
-                                    canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
-                                }
-                                
+                                if (gDoGrayScale) canvas.Scale(1, -1, info.Width / 2, info.Height / 2);
+
+
 
                                 float prt_scl_x = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_x / 100f;
                                 float prt_scl_y = ((chunk.flags & anp3_flag_enable_scale) == 0) ? 1f : chunk.scale_y / 100f;

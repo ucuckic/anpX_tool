@@ -11,7 +11,7 @@ namespace d2_spritecomp
 {
     public static class Extend
     {
-        public static void SaveBitmap(this SKImage image, string out_path, byte[] color_palette)
+        public static void SaveBitmap(this SKImage image, string out_path, byte[] color_palette, bool flip_write = false)
         {
             using (var stream_bitmap = File.Create(out_path))
             {
@@ -65,15 +65,29 @@ namespace d2_spritecomp
 
                         SKPixmap image_data = image.PeekPixels();
 
-
-                        for (int p = 0; p < image_data.BytesSize; p += 4)
+                        if(flip_write)
                         {
+                            for (int p = image_data.BytesSize; p > 0; p -= 4)
+                            {
 
-                            IntPtr pixel_data = image_data.GetPixels() + p;
-                            byte* ptr = (byte*)pixel_data.ToPointer();
+                                IntPtr pixel_data = image_data.GetPixels() + p-4;
+                                byte* ptr = (byte*)pixel_data.ToPointer();
 
-                            bitmap.Write(*ptr);
+                                bitmap.Write(*ptr);
+                            }
                         }
+                        else
+                        {
+                            for (int p = 0; p < image_data.BytesSize; p += 4)
+                            {
+
+                                IntPtr pixel_data = image_data.GetPixels() + p;
+                                byte* ptr = (byte*)pixel_data.ToPointer();
+
+                                bitmap.Write(*ptr);
+                            }
+                        }
+
                         
                     }
                 }
