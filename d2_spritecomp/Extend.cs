@@ -3,14 +3,96 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace d2_spritecomp
 {
     public static class Extend
     {
+
+        public static void CursedPng(this SKImage in_mage, string out_path, byte[] color_palette)
+        {
+            unsafe
+            {
+                var image = SKBitmap.FromImage(in_mage);
+                SKPixmap img_map = image.PeekPixels();
+
+                byte[] px_grid = new byte[img_map.BytesSize / 4];
+                var pxgrd_handle = GCHandle.Alloc(px_grid, GCHandleType.Pinned);
+
+                byte* img_ptr = (byte*)img_map.GetPixels().ToPointer();
+                byte* out_ptr = (byte*)pxgrd_handle.AddrOfPinnedObject();
+
+                for (int i = 0; i < px_grid.Length; i++)
+                {
+                    *(out_ptr + i) = *(img_ptr + (i * 4));
+                }
+
+                var px_info = new SKImageInfo(image.Width, image.Height, SKColorType.Gray8, SKAlphaType.Unpremul);
+                image.InstallPixels(px_info, pxgrd_handle.AddrOfPinnedObject(), px_info.RowBytes, delegate { pxgrd_handle.Free(); }, null);
+
+                using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                using (var stream = File.Open(out_path, FileMode.Create))
+                {
+                    //data.SaveTo(stream);
+                    using (BinaryReader strread = new BinaryReader(data.AsStream()))
+                    {
+                        using (BinaryWriter strwrite = new BinaryWriter(stream))
+                        {
+                            strwrite.Write(strread.ReadBytes(0x10));
+
+                            byte[] be_width = BitConverter.GetBytes(image.Width).Reverse().ToArray();
+                            byte[] be_height = BitConverter.GetBytes(image.Height).Reverse().ToArray();
+
+                            byte[] stuff = new byte[] { 0x08, 0x03, 0x00, 0x00, 0x00 }; //ihdr param
+                            byte[] ihdr_data = (be_width.Concat(be_height).Concat(stuff)).ToArray();
+                            strwrite.Write(ihdr_data);
+
+                            //ihdr crc
+                            //stream.Position = 0x10;
+                            byte[] ihdr_crc = BitConverter.GetBytes(Crc32(ihdr_data, 0, ihdr_data.Length, ihdrCrc));
+                            Array.Reverse(ihdr_crc);
+                            strwrite.Write(ihdr_crc);
+
+                            long pos = stream.Position;
+                            strread.BaseStream.Position = pos;
+
+                            byte[] img_buffer = strread.ReadBytes((int)strread.BaseStream.Length);
+
+                            //plte
+                            byte[] plte_chunk = new byte[] { 0, 0, 3, 0, 0x50, 0x4C, 0x54, 0x45, };
+                            byte[] plte_pal = new byte[0x300];
+
+                            pos = stream.Position;
+                            for (int clr = 0, sclr = 0; clr < color_palette.Length; clr += 4, sclr += 3)
+                            {
+                                plte_pal[sclr] = color_palette[clr + 0];
+                                plte_pal[sclr + 1] = color_palette[clr + 1];
+                                plte_pal[sclr + 2] = color_palette[clr + 2];
+                            }
+
+                            strwrite.Write(plte_chunk.Concat(plte_pal).ToArray());
+                            byte[] plte_crc = BitConverter.GetBytes(Crc32(plte_pal, 0, 0x300, plteCrc));
+                            Array.Reverse(plte_crc);
+                            strwrite.Write(plte_crc);
+
+                            //trns
+                            strwrite.Write(new byte[] { 0, 0, 0, 1, 0x74, 0x52, 0x4E, 0x53 });
+                            strwrite.Write((byte)0);
+                            byte[] trns_crc = new byte[] { 0x40, 0xE6, 0xD8, 0x66 };
+                            strwrite.Write(trns_crc);
+
+                            strwrite.Write(img_buffer);
+                        }
+                    }
+                }
+            }
+
+        }
         public static void SaveBitmap(this SKImage image, string out_path, byte[] color_palette, bool flip_write = false)
         {
             using (var stream_bitmap = File.Create(out_path))
@@ -92,6 +174,45 @@ namespace d2_spritecomp
                     }
                 }
             }
+        }
+
+
+        static uint[] crcTable;
+
+        // Stores a running CRC (initialized with the CRC of "IDAT" string). When
+        // you write this to the PNG, write as a big-endian value
+        static uint ihdrCrc = Crc32(new byte[] { (byte)'I', (byte)'H', (byte)'D', (byte)'R' }, 0, 4, 0);
+        static uint plteCrc = Crc32(new byte[] { (byte)'P', (byte)'L', (byte)'T', (byte)'E' }, 0, 4, 0);
+        static uint trnsCrc = Crc32(new byte[] { (byte)'t', (byte)'R', (byte)'N', (byte)'S' }, 0, 4, 0);
+
+        // Call this function with the compressed image bytes, 
+        // passing in idatCrc as the last parameter
+        private static uint Crc32(byte[] stream, int offset, int length, uint crc)
+        {
+            uint c;
+            if (crcTable == null)
+            {
+                crcTable = new uint[256];
+                for (uint n = 0; n <= 255; n++)
+                {
+                    c = n;
+                    for (var k = 0; k <= 7; k++)
+                    {
+                        if ((c & 1) == 1)
+                            c = 0xEDB88320 ^ ((c >> 1) & 0x7FFFFFFF);
+                        else
+                            c = ((c >> 1) & 0x7FFFFFFF);
+                    }
+                    crcTable[n] = c;
+                }
+            }
+            c = crc ^ 0xffffffff;
+            var endOffset = offset + length;
+            for (var i = offset; i < endOffset; i++)
+            {
+                c = crcTable[(c ^ stream[i]) & 255] ^ ((c >> 8) & 0xFFFFFF);
+            }
+            return c ^ 0xffffffff;
         }
     }
 }
