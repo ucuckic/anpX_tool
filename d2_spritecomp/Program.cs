@@ -154,70 +154,65 @@ namespace d2_spritecomp
 
             //using var in_sheet = Image<Rgba32>.Load(args[1]);
 
-            using ( MemoryStream chunk_dat_stream = new MemoryStream(in_dat) )
+
+            for(int i = 0; i < args.Length; i++)
             {
-                //chunk_dat_stream.Position = 0xA; //offset begin
-                //int sprite_offset = chunk_dat.
-
-
-                //chunk_dat.BaseStream.Position = (0x4);
-
-
-                for(int i = 0; i < args.Length; i++)
+                var c_arg = args[i];
+                switch(c_arg)
                 {
-                    var c_arg = args[i];
-                    switch(c_arg)
-                    {
-                        case "-nochar":
-                            exclude_char = true;
-                            break;
-                        case "-nowep":
-                            exclude_wep = true;
-                            break;
-                        case "-equip":
-                            if (i + 1 < args.Length)
+                    case "-nochar":
+                        exclude_char = true;
+                        break;
+                    case "-nowep":
+                        exclude_wep = true;
+                        break;
+                    case "-equip":
+                        if (i + 1 < args.Length)
+                        {
+                            i++;
+                            weapon_equip_path = args[i];
+                            int.TryParse(args[i], out weapon_equip);
+                        }
+                        break;
+                    case "-palette":
+                        if (i + 1 < args.Length)
+                        {
+                            i++;
+                            in_palette_path = args[i];
+                            if(File.Exists(in_palette_path))
                             {
-                                i++;
-                                weapon_equip_path = args[i];
-                                int.TryParse(args[i], out weapon_equip);
+                                in_palette = File.ReadAllBytes(in_palette_path);
                             }
-                            break;
-                        case "-palette":
-                            if (i + 1 < args.Length)
-                            {
-                                i++;
-                                in_palette_path = args[i];
-                                if(File.Exists(in_palette_path))
-                                {
-                                    in_palette = File.ReadAllBytes(in_palette_path);
-                                }
-                            }
-                            break;
-                        case "-texture":
-                            if (i + 1 < args.Length)
-                            {
-                                i++;
-                                texture_sheet_path = new DirectoryInfo(args[i]);
-                            }
-                            break;
-                        case "-tryindex":
-                            gDoAttemptIndexed = true;
-                            break;
-                        case "-outdir":
-                            if(i + 1 < args.Length)
-                            {
-                                i++;
-                                out_dir = new DirectoryInfo(args[i]);
-                            }
-                            break;
-                        case "-saveparts":
-                            save_parts = true;
-                            break;
-                    }
+                        }
+                        break;
+                    case "-texture":
+                        if (i + 1 < args.Length)
+                        {
+                            i++;
+                            texture_sheet_path = new DirectoryInfo(args[i]);
+                        }
+                        break;
+                    case "-tryindex":
+                        gDoAttemptIndexed = true;
+                        break;
+                    case "-outdir":
+                        if(i + 1 < args.Length)
+                        {
+                            i++;
+                            out_dir = new DirectoryInfo(args[i]);
+                            palettes_out_dir = new DirectoryInfo(Path.Combine(out_dir.FullName, @"palettes"));
+                        }
+                        break;
+                    case "-saveparts":
+                        save_parts = true;
+                        break;
                 }
+            }
 
 
-                in_dir = new DirectoryInfo(og_in_path);
+            in_dir = new DirectoryInfo(og_in_path);
+            using (MemoryStream chunk_dat_stream = new MemoryStream(in_dat))
+            {
                 switch (anp_string)
                 {
                     case "anp2": //destiny 2
@@ -238,6 +233,14 @@ namespace d2_spritecomp
                     case "V154": //hearts
                         V154_unpack(chunk_dat_stream);
                         break;
+                    case "TM2@":
+                        chunk_dat_stream.Dispose();
+                        dump_tm2(og_in_path);
+                        break;
+                    case "TM2#":
+                        chunk_dat_stream.Dispose();
+                        dump_tm2(og_in_path);
+                        break;
                     default:
                         Console.WriteLine("anp header missing");
                         return;
@@ -246,22 +249,65 @@ namespace d2_spritecomp
             
         }
 
-        public struct tm2_sheet
+        static void dump_tm2(string in_path)
         {
-            public UInt32 data_size;
-            public byte pixel_format;
+            DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+            string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+            tm2_file in_tm2 = tm2_file.Load(in_path);
+            if (in_tm2.texture_sheets.Count > 0)
+            {
+                byte[][] pals = new byte[in_tm2.texture_sheets.Count][];
+                byte[] consolidated_pal = new byte[256 * 4];
 
-            //possibly unneeded
-            public UInt16 buffer_paste_x;
-            public UInt16 buffer_paste_y;
+                for (int i = 0; i < in_tm2.palette_sheets.Count; i++)
+                {
+                    byte[] add_pal = new byte[256 * 4];
+                    in_tm2.palette_sheets[i].pixel_data.CopyTo(add_pal, 0);
 
+                    if (i * 0x10 < 256)
+                    {
+                        in_tm2.palette_sheets[i].pixel_data.CopyTo(consolidated_pal, i * 0x40);
+                    }
 
-            public UInt16 width;
-            public UInt16 height;
+                }
 
-            public byte[] pixel_data;
+                out_dir.Create();
+                for (int i = 0; i < in_tm2.texture_sheets.Count; i++)
+                {
+                    tm2_sheet new_sheet = in_tm2.texture_sheets[i];
+                    using (SKBitmap in_sheet = new SKBitmap())
+                    {
+                        byte[] flip_data = new_sheet.pixel_data;
+                        //Array.Reverse(flip_data);
 
-            public int exist_y;
+                        var gcHandle = GCHandle.Alloc(flip_data, GCHandleType.Pinned);
+
+                        // install the pixels with the color type of the pixel data
+                        var img_info = new SKImageInfo(new_sheet.width, new_sheet.height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+                        in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+
+                        string out_path = Path.Combine(out_dir.FullName, fname + "_sheet_" + i + ".png");
+
+                        if (gDoAttemptIndexed)
+                        {
+                            //SKImage.FromBitmap(in_sheet).SaveBitmap(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".bmp"),consolidated_pal,true);
+                            SKImage.FromBitmap(in_sheet).CursedPng(out_path, consolidated_pal);
+                        }
+                        else
+                        {
+                            //Console.WriteLine("svpart " + b);
+                            using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
+                            using (var stream = File.OpenWrite(out_path))
+                            {
+                                // save the data to a stream
+                                data.SaveTo(stream);
+                            }
+                        }
+
+                    }
+                }
+                
+            }
         }
 
         static void anp2_unpack(MemoryStream in_file, string in_path)
@@ -273,290 +319,67 @@ namespace d2_spritecomp
             DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
             string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
 
-            List<tm2_sheet> palette_sheets = new List<tm2_sheet>();
-            List<tm2_sheet> texture_sheets = new List<tm2_sheet>();
-            int composite_height = 0;
-
             byte[][] pals = new byte[0][];
             byte[] consolidated_pal = new byte[256 * 4];
 
-            //fuck it read all bytes
-            using (FileStream in_texture_stream = File.OpenRead(in_path))
+            tm2_file in_tm2 = tm2_file.Load(in_path);
+            if (in_tm2.texture_sheets.Count > 0)
             {
-                using (BinaryReader tm2 = new BinaryReader(in_texture_stream))
+                process_type = 1;
+
+                pals = new byte[in_tm2.palette_sheets.Count][];
+
+                for (int i = 0; i < in_tm2.palette_sheets.Count; i++)
                 {
-                    byte[] header_check = tm2.ReadBytes(3);
-                    
+                    byte[] add_pal = new byte[256 * 4];
+                    in_tm2.palette_sheets[i].pixel_data.CopyTo(add_pal,0);
+                    pals[i] = add_pal;
 
-                    //TM2
-                    if (header_check.SequenceEqual(new byte[] { 0x54,0x4D,0x32 }))
+                    if (i * 0x10 < 256)
                     {
-                        process_type = 1;
-                        byte tm2_type = tm2.ReadByte();
+                        in_tm2.palette_sheets[i].pixel_data.CopyTo(consolidated_pal, i * 0x40);
+                    }
+                    
+                }
 
-                        byte something = tm2.ReadByte();
-                        byte palette_count = tm2.ReadByte();
-                        byte chunk_count = tm2.ReadByte();
-                        tm2.BaseStream.Position = 0x10;
-
-                        pals = new byte[palette_count][];
-
-                        //treat the palette sheets just as the game would, presumably, just in case
-                        for (int i = 0; i < palette_count; i++)
+                if(save_parts)
+                {
+                    part_out_dir.Create();
+                    for (int i = 0; i < in_tm2.texture_sheets.Count; i++)
+                    {
+                        tm2_sheet new_sheet = in_tm2.texture_sheets[i];
+                        using (SKBitmap in_sheet = new SKBitmap())
                         {
-                            tm2_sheet new_sheet = new tm2_sheet();
+                            byte[] flip_data = new_sheet.pixel_data;
+                            //Array.Reverse(flip_data);
 
+                            var gcHandle = GCHandle.Alloc(flip_data, GCHandleType.Pinned);
 
-                            new_sheet.data_size = tm2.ReadUInt32() - 0x10;
+                            // install the pixels with the color type of the pixel data
+                            var img_info = new SKImageInfo(new_sheet.width, new_sheet.height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+                            in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
 
-                            new_sheet.pixel_format = tm2.ReadByte();
-                            tm2.ReadBytes(3);
-                            new_sheet.buffer_paste_x = tm2.ReadUInt16();
-                            new_sheet.buffer_paste_y = tm2.ReadUInt16();
-                            new_sheet.width = tm2.ReadUInt16();
-                            new_sheet.height = tm2.ReadUInt16();
-
-                            //
-
-                            if(new_sheet.data_size == 0x40)
+                            if (gDoAttemptIndexed)
                             {
-                                new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
+                                //SKImage.FromBitmap(in_sheet).SaveBitmap(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".bmp"),consolidated_pal,true);
+                                SKImage.FromBitmap(in_sheet).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png"), consolidated_pal);
                             }
                             else
                             {
-                                List<byte[]> pals_out = new List<byte[]>();
-                                for (int col = 0; col < 0x8; col++)
+                                //Console.WriteLine("svpart " + b);
+                                using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png")))
                                 {
-                                    Console.WriteLine("off before: 0x{0:X}", tm2.BaseStream.Position);
-
-                                    byte[] pal_1_half_1 = tm2.ReadBytes(0x20);
-                                    byte[] pal_2_half_1 = tm2.ReadBytes(0x20);
-
-                                    byte[] pal_1_half_2 = tm2.ReadBytes(0x20);
-                                    byte[] pal_2_half_2 = tm2.ReadBytes(0x20);
-
-                                    pals_out.Add(pal_1_half_1.Concat(pal_1_half_2).ToArray());
-                                    pals_out.Add(pal_2_half_1.Concat(pal_2_half_2).ToArray());
-
-                                    Console.WriteLine("off after: 0x{0:X}", tm2.BaseStream.Position);
-                                }
-
-                                new_sheet.pixel_data = pals_out.SelectMany(x => x).ToArray();
-                            }
-
-
-
-
-                            palette_sheets.Add(new_sheet);
-
-
-                            //unfuck palettes while we are here and create a proper palette array
-                            
-                            byte[] add_pal = new byte[256 * 4];
-                            for(int h = 0; h < add_pal.Length; h+=4)
-                            {
-                                add_pal[h] = (byte)(h / 4);
-                                add_pal[h+1] = (byte)(h/4);
-                                add_pal[h+2] = (byte)(h / 4);
-                                add_pal[h + 3] = 0xff;
-                            }
-                            
-
-                            new_sheet.pixel_data.CopyTo(add_pal,0);
-
-                            if(i < 0x10)
-                            {
-                                new_sheet.pixel_data.CopyTo(consolidated_pal, i * 0x40);
-                            }
-
-                            pals[i] = add_pal;
-
-                            palettes_out_dir.Create();
-                            using(FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "t_pal" + i + ".pal")))
-                            {
-                                writecolor.Write(lazy_mspal_header);
-                                writecolor.Write(add_pal);
-                            }
-
-                        }
-
-                        /*
-                        for (int g = 0; g < consolidated_pal.Length; g += 4)
-                        {
-                            //reverse the color palette for bmp export
-
-                            byte[] buffer = new byte[3];
-                            Array.ConstrainedCopy(consolidated_pal, g, buffer, 0, 3);
-                            Array.Reverse(buffer);
-                            Array.ConstrainedCopy(buffer, 0, consolidated_pal, g, 3);
-                        }
-                        */
-
-                        for (int i = 0; i < chunk_count; i++)
-                        {
-                            tm2_sheet new_sheet = new tm2_sheet();
-
-                            //where is this sheet on the total y axis
-                            new_sheet.exist_y = composite_height;
-
-                            new_sheet.data_size = tm2.ReadUInt32()-0x10;
-
-                            new_sheet.pixel_format = tm2.ReadByte();
-                            tm2.ReadBytes(3);
-                            new_sheet.buffer_paste_x = tm2.ReadUInt16();
-                            new_sheet.buffer_paste_y = tm2.ReadUInt16();
-                            new_sheet.width = tm2.ReadUInt16();
-                            new_sheet.height = tm2.ReadUInt16();
-
-                            //keep increasing the y position by the culminated sheet heights
-                            composite_height += new_sheet.height;
-
-                            if (tm2_type == 0x23)
-                            {
-                                int inc_vl = (new_sheet.pixel_format == 20) ? 8 : 4;
-                                int bpp = ( new_sheet.pixel_format == 20 ) ? 4 : 8;
-                                new_sheet.pixel_data = new byte[(new_sheet.data_size * 8) + 1024];
-
-                                long s_pos = tm2.BaseStream.Position;
-
-                                for (int j = 1, k = 0; j < ( ( new_sheet.data_size ) / 128 ) + 1; j++)
-                                {
-                                    int div = j / 8;
-                                    int cnk_div = (j % 8) * 16;
-
-                                    for (int px_y = 0; px_y < (bpp*2); px_y++)
-                                    {
-                                        for (int px_x = 0; px_x < 16; px_x++, k += inc_vl)
-                                        {
-                                            byte raw_byte = tm2.ReadByte();
-
-                                            if(new_sheet.pixel_format == 20)
-                                            {
-                                                byte pixel1 = (byte)(raw_byte & 0x0F);
-                                                byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
-
-
-                                                //alpha
-                                                new_sheet.pixel_data[k + 7] = 0xff;
-
-                                                new_sheet.pixel_data[k + 6] = 0;
-                                                new_sheet.pixel_data[k + 5] = 0xff;
-                                                new_sheet.pixel_data[k + 4] = 0;
-
-                                                //alpha
-                                                new_sheet.pixel_data[k + 3] = 0xff;
-
-                                                new_sheet.pixel_data[k + 2] = 0;
-                                                new_sheet.pixel_data[k + 1] = 0xff;
-                                                new_sheet.pixel_data[k + 0] = 0;
-
-                                                //alpha
-                                                new_sheet.pixel_data[k + 7] = 0xff;
-
-                                                new_sheet.pixel_data[k + 6] = pixel2;
-                                                new_sheet.pixel_data[k + 5] = pixel2;
-                                                new_sheet.pixel_data[k + 4] = pixel2;
-
-                                                //alpha
-                                                new_sheet.pixel_data[k + 3] = 0xff;
-
-                                                new_sheet.pixel_data[k + 2] = pixel1;
-                                                new_sheet.pixel_data[k + 1] = pixel1;
-                                                new_sheet.pixel_data[k + 0] = pixel1;
-                                            }
-                                            else
-                                            {
-                                                new_sheet.pixel_data[k + 0] = raw_byte;
-                                                new_sheet.pixel_data[k + 1] = raw_byte;
-                                                new_sheet.pixel_data[k + 2] = raw_byte;
-                                                new_sheet.pixel_data[k + 3] = 0xff;
-                                            }
-
-
-
-                                        }
-
-                                        tm2.BaseStream.Position += (new_sheet.width / 2) - 16;
-                                    }
-
-                                    tm2.BaseStream.Position = s_pos + cnk_div + (div * (256*bpp) );
-                                    //Console.WriteLine("seek "+tm2.BaseStream.Position+" div "+div);
-                                }
-                            }
-                            else
-                            {
-                                switch (new_sheet.pixel_format)
-                                {
-                                    case 19:
-                                        new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
-                                        break;
-                                    case 20:
-                                        new_sheet.pixel_data = new byte[(new_sheet.data_size * 8)];
-                                        for (int j = 0, k = 0; j < new_sheet.data_size; j++, k += 8)
-                                        {
-                                            byte raw_byte = tm2.ReadByte();
-                                            byte pixel1 = (byte)(raw_byte & 0x0F);
-                                            byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
-
-
-                                            //alpha
-                                            new_sheet.pixel_data[k + 7] = 0xff;
-
-                                            new_sheet.pixel_data[k + 6] = pixel2;
-                                            new_sheet.pixel_data[k + 5] = pixel2;
-                                            new_sheet.pixel_data[k + 4] = pixel2;
-
-                                            //alpha
-                                            new_sheet.pixel_data[k + 3] = 0xff;
-
-                                            new_sheet.pixel_data[k + 2] = pixel1;
-                                            new_sheet.pixel_data[k + 1] = pixel1;
-                                            new_sheet.pixel_data[k + 0] = pixel1;
-                                        }
-                                        break;
-
+                                    // save the data to a stream
+                                    data.SaveTo(stream);
                                 }
                             }
 
-
-                            texture_sheets.Add(new_sheet);
-
-                            if (save_parts)
-                            {
-                                if (save_parts) part_out_dir.Create();
-                                using (SKBitmap in_sheet = new SKBitmap())
-                                {
-                                    byte[] flip_data = new_sheet.pixel_data;
-                                    //Array.Reverse(flip_data);
-
-                                    var gcHandle = GCHandle.Alloc(flip_data, GCHandleType.Pinned);
-
-                                    // install the pixels with the color type of the pixel data
-                                    var img_info = new SKImageInfo(new_sheet.width, new_sheet.height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
-                                    in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
-
-                                    if(gDoAttemptIndexed)
-                                    {
-                                        //SKImage.FromBitmap(in_sheet).SaveBitmap(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".bmp"),consolidated_pal,true);
-                                        SKImage.FromBitmap(in_sheet).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png"), consolidated_pal);
-                                    }
-                                    else
-                                    {
-                                        //Console.WriteLine("svpart " + b);
-                                        using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
-                                        using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png")))
-                                        {
-                                            // save the data to a stream
-                                            data.SaveTo(stream);
-                                        }
-                                    }
-
-                                }
-                            }
                         }
                     }
                 }
             }
+            
 
 
             using (BinaryReader chunk_dat = new BinaryReader(in_file))
@@ -698,7 +521,7 @@ namespace d2_spritecomp
                     }
 
                     out_dir.Create();
-                    //if (save_parts) part_out_dir.Create();
+                    if (save_parts) part_out_dir.Create();
 
                     var info = new SKImageInfo(512, 512);
                     int off_x = info.Width / 2;
@@ -728,24 +551,24 @@ namespace d2_spritecomp
                                 if (chunk.x > in_sheet.Width) continue;
                                 if (chunk.y > in_sheet.Height) continue;
                                 if (chunk.y + chunk.len_y > in_sheet.Height) continue;
-                                if (chunk.x + chunk.len_x > in_sheet.Height) continue;
+                                if (chunk.x + chunk.len_x > in_sheet.Width) continue;
                             }
                             else
                             {
-                                if (chunk.y > composite_height)
+                                if (chunk.y > in_tm2.consolidated_height)
                                 {
                                     continue;
                                 }
 
                                 int use_sheet = 0;
-                                for (int i = 0; i < texture_sheets.Count(); i++)
+                                for (int i = 0; i < in_tm2.texture_sheets.Count(); i++)
                                 {
-                                    tm2_sheet c_sheet = texture_sheets[i];
+                                    tm2_sheet c_sheet = in_tm2.texture_sheets[i];
 
                                     if (chunk.y >= c_sheet.exist_y)
                                     {
                                         Console.WriteLine("cy >= " + c_sheet.exist_y + " csheet height " + c_sheet.height + " sel " + use_sheet);
-                                        Console.WriteLine("chunky " + chunk.y + " num sheets " + texture_sheets.Count());
+                                        Console.WriteLine("chunky " + chunk.y + " num sheets " + in_tm2.texture_sheets.Count());
                                         if (chunk.y < (c_sheet.exist_y + c_sheet.height))
                                         {
                                             use_sheet = i;
@@ -756,10 +579,10 @@ namespace d2_spritecomp
                                     }
                                 }
 
-                                var gcHandle = GCHandle.Alloc(texture_sheets[use_sheet].pixel_data, GCHandleType.Pinned);
+                                var gcHandle = GCHandle.Alloc(in_tm2.texture_sheets[use_sheet].pixel_data, GCHandleType.Pinned);
 
                                 // install the pixels with the color type of the pixel data
-                                var img_info = new SKImageInfo(texture_sheets[use_sheet].width, texture_sheets[use_sheet].height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+                                var img_info = new SKImageInfo(in_tm2.texture_sheets[use_sheet].width, in_tm2.texture_sheets[use_sheet].height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
                                 in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
                             }
 
@@ -801,13 +624,22 @@ namespace d2_spritecomp
 
                             if (save_parts)
                             {
-                                //Console.WriteLine("svpart " + b);
-                                using (var data = out_part.Encode(SKEncodedImageFormat.Png, 100))
-                                using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_spr_"+h+"_part_"+g+".png")))
+                                if (gDoAttemptIndexed)
                                 {
-                                    // save the data to a stream
-                                    data.SaveTo(stream);
+                                    byte[] use_pal = (in_palette_path != "") ? in_palette : consolidated_pal;
+                                    SKImage.FromBitmap(out_part).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_spr_" + h + "_part_" + g + ".png"), use_pal);
                                 }
+                                else
+                                {
+                                    //Console.WriteLine("svpart " + b);
+                                    using (var data = out_part.Encode(SKEncodedImageFormat.Png, 100))
+                                    using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_spr_" + h + "_part_" + g + ".png")))
+                                    {
+                                        // save the data to a stream
+                                        data.SaveTo(stream);
+                                    }
+                                }
+
                                     
                             }
                             
@@ -889,7 +721,9 @@ namespace d2_spritecomp
                             //consolidated_pal
                             //surface.Snapshot().SaveBitmap(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".bmp"), consolidated_pal);
 
-                            surface.Snapshot().CursedPng(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png"), in_palette);
+
+                            byte[] use_pal = (in_palette_path != "") ? in_palette : consolidated_pal;
+                            surface.Snapshot().CursedPng(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".png"), use_pal);
 
                         }
                         else
@@ -2538,6 +2372,306 @@ namespace d2_spritecomp
             }
             Console.WriteLine("Decompressed until -> 0x{0:X}", file.BaseStream.Position);
             return data;
+        }
+
+        public struct tm2_sheet
+        {
+            public UInt32 data_size;
+            public byte pixel_format;
+
+            //possibly unneeded
+            public UInt16 buffer_paste_x;
+            public UInt16 buffer_paste_y;
+
+
+            public UInt16 width;
+            public UInt16 height;
+
+            public byte[] pixel_data;
+
+            public int exist_y;
+        }
+
+        public class tm2_file
+        {
+            public List<tm2_sheet> palette_sheets = new List<tm2_sheet>();
+            public List<tm2_sheet> texture_sheets = new List<tm2_sheet>();
+            public int consolidated_height;
+            public byte[] consolidated_pal = new byte[256 * 4];
+
+            public byte thing;
+            public byte palette_count;
+            public byte chunk_count;
+
+            public static tm2_file Load(string in_path)
+            {
+                tm2_file out_file = new tm2_file();
+
+                using (FileStream in_texture_stream = File.OpenRead(in_path))
+                {
+                    using (BinaryReader tm2 = new BinaryReader(in_texture_stream))
+                    {
+                        byte[] header_check = tm2.ReadBytes(3);
+                        //TM2
+                        if (header_check.SequenceEqual(new byte[] { 0x54, 0x4D, 0x32 }))
+                        {
+                            byte tm2_type = tm2.ReadByte();
+
+                            out_file.thing = tm2.ReadByte();
+                            out_file.palette_count = tm2.ReadByte();
+                            out_file.chunk_count = tm2.ReadByte();
+                            tm2.BaseStream.Position = 0x10;
+
+                            //treat the palette sheets just as the game would, presumably, just in case
+                            for (int i = 0; i < out_file.palette_count; i++)
+                            {
+                                tm2_sheet new_sheet = new tm2_sheet();
+
+
+                                new_sheet.data_size = tm2.ReadUInt32() - 0x10;
+
+                                new_sheet.pixel_format = tm2.ReadByte();
+                                tm2.ReadBytes(3);
+                                new_sheet.buffer_paste_x = tm2.ReadUInt16();
+                                new_sheet.buffer_paste_y = tm2.ReadUInt16();
+                                new_sheet.width = tm2.ReadUInt16();
+                                new_sheet.height = tm2.ReadUInt16();
+
+                                //
+
+                                if (new_sheet.data_size == 0x40)
+                                {
+                                    new_sheet.pixel_data = tm2.ReadBytes((int)new_sheet.data_size);
+                                }
+                                else
+                                {
+                                    List<byte[]> pals_out = new List<byte[]>();
+                                    for (int col = 0; col < 0x8; col++)
+                                    {
+                                        Console.WriteLine("off before: 0x{0:X}", tm2.BaseStream.Position);
+
+                                        byte[] pal_1_half_1 = tm2.ReadBytes(0x20);
+                                        byte[] pal_2_half_1 = tm2.ReadBytes(0x20);
+
+                                        byte[] pal_1_half_2 = tm2.ReadBytes(0x20);
+                                        byte[] pal_2_half_2 = tm2.ReadBytes(0x20);
+
+                                        pals_out.Add(pal_1_half_1.Concat(pal_1_half_2).ToArray());
+                                        pals_out.Add(pal_2_half_1.Concat(pal_2_half_2).ToArray());
+
+                                        Console.WriteLine("off after: 0x{0:X}", tm2.BaseStream.Position);
+                                    }
+
+                                    new_sheet.pixel_data = pals_out.SelectMany(x => x).ToArray();
+                                }
+
+
+
+
+                                out_file.palette_sheets.Add(new_sheet);
+
+
+                                //unfuck palettes while we are here and create a proper palette array
+
+                                byte[] add_pal = new byte[256 * 4];
+                                for (int h = 0; h < add_pal.Length; h += 4)
+                                {
+                                    add_pal[h] = (byte)(h / 4);
+                                    add_pal[h + 1] = (byte)(h / 4);
+                                    add_pal[h + 2] = (byte)(h / 4);
+                                    add_pal[h + 3] = 0xff;
+                                }
+
+
+                                new_sheet.pixel_data.CopyTo(add_pal, 0);
+
+                                if (i < 0x10)
+                                {
+                                    if ((i * 0x40) + new_sheet.pixel_data.Length > out_file.consolidated_pal.Length)
+                                    {
+
+                                    }
+                                    else
+                                    {
+                                        new_sheet.pixel_data.CopyTo(out_file.consolidated_pal, i * 0x40);
+                                    }
+
+                                }
+
+                                palettes_out_dir.Create();
+                                using (FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "t_pal" + i + ".pal")))
+                                {
+                                    writecolor.Write(lazy_mspal_header);
+                                    writecolor.Write(add_pal);
+                                }
+
+                            }
+
+                            /*
+                            for (int g = 0; g < consolidated_pal.Length; g += 4)
+                            {
+                                //reverse the color palette for bmp export
+
+                                byte[] buffer = new byte[3];
+                                Array.ConstrainedCopy(consolidated_pal, g, buffer, 0, 3);
+                                Array.Reverse(buffer);
+                                Array.ConstrainedCopy(buffer, 0, consolidated_pal, g, 3);
+                            }
+                            */
+
+                            for (int i = 0; i < out_file.chunk_count; i++)
+                            {
+                                tm2_sheet new_sheet = new tm2_sheet();
+
+                                //where is this sheet on the total y axis
+                                new_sheet.exist_y = out_file.consolidated_height;
+
+                                new_sheet.data_size = tm2.ReadUInt32() - 0x10;
+
+                                new_sheet.pixel_format = tm2.ReadByte();
+                                tm2.ReadBytes(3);
+                                new_sheet.buffer_paste_x = tm2.ReadUInt16();
+                                new_sheet.buffer_paste_y = tm2.ReadUInt16();
+                                new_sheet.width = tm2.ReadUInt16();
+                                new_sheet.height = tm2.ReadUInt16();
+
+                                //keep increasing the y position by the culminated sheet heights
+                                out_file.consolidated_height += new_sheet.height;
+
+                                if (tm2_type == 0x23)
+                                {
+                                    int inc_vl = (new_sheet.pixel_format == 20) ? 8 : 4;
+                                    int bpp = (new_sheet.pixel_format == 20) ? 4 : 8;
+                                    new_sheet.pixel_data = new byte[(new_sheet.data_size * 8) + 1024];
+
+                                    long s_pos = tm2.BaseStream.Position;
+
+                                    for (int j = 1, k = 0; j < ((new_sheet.data_size) / 128) + 1; j++)
+                                    {
+                                        int div = j / 8;
+                                        int cnk_div = (j % 8) * 16;
+
+                                        for (int px_y = 0; px_y < (bpp * 2); px_y++)
+                                        {
+                                            for (int px_x = 0; px_x < 16; px_x++, k += inc_vl)
+                                            {
+                                                byte raw_byte = tm2.ReadByte();
+
+                                                if (new_sheet.pixel_format == 20)
+                                                {
+                                                    byte pixel1 = (byte)(raw_byte & 0x0F);
+                                                    byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
+
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 7] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 6] = 0;
+                                                    new_sheet.pixel_data[k + 5] = 0xff;
+                                                    new_sheet.pixel_data[k + 4] = 0;
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 2] = 0;
+                                                    new_sheet.pixel_data[k + 1] = 0xff;
+                                                    new_sheet.pixel_data[k + 0] = 0;
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 7] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 6] = pixel2;
+                                                    new_sheet.pixel_data[k + 5] = pixel2;
+                                                    new_sheet.pixel_data[k + 4] = pixel2;
+
+                                                    //alpha
+                                                    new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                    new_sheet.pixel_data[k + 2] = pixel1;
+                                                    new_sheet.pixel_data[k + 1] = pixel1;
+                                                    new_sheet.pixel_data[k + 0] = pixel1;
+                                                }
+                                                else
+                                                {
+                                                    new_sheet.pixel_data[k + 0] = raw_byte;
+                                                    new_sheet.pixel_data[k + 1] = raw_byte;
+                                                    new_sheet.pixel_data[k + 2] = raw_byte;
+                                                    new_sheet.pixel_data[k + 3] = 0xff;
+                                                }
+
+
+
+                                            }
+
+                                            tm2.BaseStream.Position += (new_sheet.width / 2) - 16;
+                                        }
+
+                                        tm2.BaseStream.Position = s_pos + cnk_div + (div * (256 * bpp));
+                                        //Console.WriteLine("seek "+tm2.BaseStream.Position+" div "+div);
+                                    }
+                                }
+                                else
+                                {
+                                    switch (new_sheet.pixel_format)
+                                    {
+                                        case 19:
+                                            new_sheet.pixel_data = new byte[(new_sheet.data_size * 8)];
+                                            for (int j = 0, k = 0; j < new_sheet.data_size; j++, k += 4)
+                                            {
+                                                byte raw_byte = tm2.ReadByte();
+
+                                                //alpha
+                                                new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                new_sheet.pixel_data[k + 2] = raw_byte;
+                                                new_sheet.pixel_data[k + 1] = raw_byte;
+                                                new_sheet.pixel_data[k + 0] = raw_byte;
+                                            }
+                                            break;
+                                        case 20:
+                                            new_sheet.pixel_data = new byte[(new_sheet.data_size * 8)];
+                                            for (int j = 0, k = 0; j < new_sheet.data_size; j++, k += 8)
+                                            {
+                                                byte raw_byte = tm2.ReadByte();
+                                                byte pixel1 = (byte)(raw_byte & 0x0F);
+                                                byte pixel2 = (byte)((raw_byte & 0xF0) >> 4);
+
+
+                                                //alpha
+                                                new_sheet.pixel_data[k + 7] = 0xff;
+
+                                                new_sheet.pixel_data[k + 6] = pixel2;
+                                                new_sheet.pixel_data[k + 5] = pixel2;
+                                                new_sheet.pixel_data[k + 4] = pixel2;
+
+                                                //alpha
+                                                new_sheet.pixel_data[k + 3] = 0xff;
+
+                                                new_sheet.pixel_data[k + 2] = pixel1;
+                                                new_sheet.pixel_data[k + 1] = pixel1;
+                                                new_sheet.pixel_data[k + 0] = pixel1;
+                                            }
+                                            break;
+
+                                    }
+                                }
+
+
+                                out_file.texture_sheets.Add(new_sheet);
+
+                                if (save_parts)
+                                {
+                                    if (save_parts) part_out_dir.Create();
+                                }
+                            }
+
+
+                        }
+                    }
+                }
+
+                return out_file;
+            }
         }
     }
 }
