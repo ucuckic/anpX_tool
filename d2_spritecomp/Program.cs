@@ -490,25 +490,32 @@ namespace d2_spritecomp
                         //dynamic struct size for transforms
                         switch(tex_flags&(anp2_flag_enable_translation|anp2_flag_enable_scale))
                         {
-                            case anp2_flag_enable_translation: //translate/rotate
-                                Console.WriteLine("rot");
+                            case anp2_flag_enable_scale | anp2_flag_enable_translation: //both
+                                Console.WriteLine("double trans");
 
-                                add_dat.offset_x = chunk_dat.ReadByte();
-                                add_dat.offset_y = chunk_dat.ReadByte();
+                                add_dat.offset_x = chunk_dat.ReadSByte(); //doing everything right in a row is surprisingly sane
+                                add_dat.offset_y = chunk_dat.ReadSByte();
                                 add_dat.rot_angle = chunk_dat.ReadInt16();
+                                add_dat.scale_x = chunk_dat.ReadInt16();
+                                add_dat.scale_y = chunk_dat.ReadInt16();
+
+                                Console.WriteLine("scl y "+add_dat.scale_y);
+                                Console.WriteLine("scl x " + add_dat.scale_x);
+
+                                break;
+                            case anp2_flag_enable_translation: //translate/rotate
+                                Console.WriteLine("rot read "+chunk_dat.BaseStream.Position);
+
+                                add_dat.offset_x = chunk_dat.ReadSByte();
+                                add_dat.offset_y = chunk_dat.ReadSByte();
+                                add_dat.rot_angle = chunk_dat.ReadInt16();
+
+                                Console.WriteLine("xfy "+add_dat.offset_y);
+
                                 break;
                             case anp2_flag_enable_scale: //scale
                                 Console.WriteLine("scl");
 
-                                add_dat.scale_x = chunk_dat.ReadInt16();
-                                add_dat.scale_y = chunk_dat.ReadInt16();
-                                break;
-                            case anp2_flag_enable_scale | anp2_flag_enable_translation: //both
-                                Console.WriteLine("double trans");
-
-                                add_dat.offset_x = chunk_dat.ReadByte(); //doing everything right in a row is surprisingly sane
-                                add_dat.offset_y = chunk_dat.ReadByte();
-                                add_dat.rot_angle = chunk_dat.ReadInt16();
                                 add_dat.scale_x = chunk_dat.ReadInt16();
                                 add_dat.scale_y = chunk_dat.ReadInt16();
                                 break;
@@ -675,13 +682,13 @@ namespace d2_spritecomp
                             SKPoint chunk_center = new SKPoint(chunk.len_x / 2, chunk.len_y / 2);
 
                             canvas.Translate(canvas_trans.X, canvas_trans.Y);
-                            canvas.Translate(chunk.paste_x - (chunk.len_x / 2), chunk.paste_y - (chunk.len_y / 2));
-
-
+                            canvas.Translate( chunk.paste_x - (chunk.len_x / 2), chunk.paste_y - (chunk.len_y / 2) );
 
                             if ((chunk.flags & anp2_flag_enable_translation) != 0)
                             {
                                 canvas.RotateDegrees(chunk.rot_angle / 11.33f, chunk_center.X + chunk.rot_axis_x, chunk_center.Y + chunk.rot_axis_y);
+                                canvas.Scale(prt_scl_x, prt_scl_y, chunk_center.X, chunk_center.Y);
+
                                 canvas.Translate(chunk.offset_x,chunk.offset_y);
                             }
 
