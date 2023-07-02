@@ -2144,11 +2144,6 @@ namespace d2_spritecomp
                         pixel2 += (byte)(c_chunk.use_palette * 0x10);
 
                         int pal = (c_chunk.use_palette >= 0x20) ? 1 : 0;
-                        if (pal == 1 && gDoAttemptIndexed)
-                        {
-                            pixel1 += 64;
-                            pixel2 += 64;
-                        }
 
 
                         if (gDoAttemptIndexed)
@@ -2156,6 +2151,12 @@ namespace d2_spritecomp
                             //binary alpha
                             int alpha_1 = ( pals[pal, pixel1].a < 0xff ) ? 0 : 0xff;
                             int alpha_2 = ( pals[pal, pixel2].a < 0xff ) ? 0 : 0xff;
+
+                            if( pal==1 )
+                            {
+                                pixel1 += 0x40;
+                                pixel2 += 0x40;
+                            }
 
                             direct_color_data[out_pixel_index + 0] = pixel1;
                             direct_color_data[out_pixel_index + 1] = pixel1;
@@ -2553,7 +2554,7 @@ namespace d2_spritecomp
 
                                     long s_pos = tm2.BaseStream.Position;
 
-                                    for (int j = 1, k = 0; j < ((new_sheet.data_size) / 128) + 1; j++)
+                                    for (int j = 1, k = 0; j < ((new_sheet.data_size) / (bpp * 32)) + 1; j++)
                                     {
                                         int div = j / 8;
                                         int cnk_div = (j % 8) * 16;
