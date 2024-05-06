@@ -55,6 +55,10 @@ namespace d2_spritecomp
         const int V154_flag_compress_chunk = 0x40;
         const int V154_flag_compress_image = 0x80;
 
+        //BATM
+        const int BATM_flag_flip_x = 0x10;
+        const int BATM_flag_flip_y = 0x20;
+
         struct weac_dat
         {
             public uint paste_offset;
@@ -69,6 +73,36 @@ namespace d2_spritecomp
                 this.data_size = DataSize;
                 this.data_array = Data;
             }
+        }
+
+        struct batm_tile_def
+        {
+            //mostly universal
+            public int x;
+            public int y;
+            public int use_tex;
+            public int flags;
+        }
+        struct batm_element
+        {
+            //mostly universal
+            public int x;
+            public int y;
+            public int z;
+            public int orient_byte;
+            public int num_tiles_x;
+            public int num_tiles_y;
+            public int scale;
+
+            public int unk1; //persp? 1b
+
+            public int draw_type; // 1b
+
+            public int unk2; //fog effect interaction? 1b
+
+            public int unk3; //nothing? 2b
+
+            public int[] tile_array;
         }
 
         struct i_dat
@@ -233,13 +267,23 @@ namespace d2_spritecomp
                     case "V154": //hearts
                         V154_unpack(chunk_dat_stream);
                         break;
-                    case "TM2@":
+                    case "TM2@": //destiny 2 ps2 tm2 texture
                         chunk_dat_stream.Dispose();
                         dump_tm2(og_in_path);
                         break;
-                    case "TM2#":
+                    case "TM2#": //destiny 2 psp tm2 texture
                         chunk_dat_stream.Dispose();
                         dump_tm2(og_in_path);
+                        break;
+                    case "BATM": //destiny 2 stage layout file
+                        if (texture_sheet_path == null)
+                        {
+                            Console.WriteLine("BATM detected, but no texture sheet supplied. supply with: -texture");
+                            break;
+                        }
+
+                        in_path = texture_sheet_path.FullName;
+                        batm_unpack(chunk_dat_stream, in_path);
                         break;
                     default:
                         Console.WriteLine("anp header missing");
@@ -2335,6 +2379,268 @@ namespace d2_spritecomp
 
         }
 
+
+        static void batm_unpack(MemoryStream in_file, string in_path)
+        {
+            DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+            string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+            byte[][] pals = new byte[0][];
+
+            tm2_file in_tm2 = tm2_file.Load(in_path);
+            List<batm_tile_def> tile_list = new List<batm_tile_def>();
+            List<batm_element> element_list = new List<batm_element>();
+
+            using (BinaryReader batm_read = new BinaryReader(in_file))
+            {
+                batm_read.BaseStream.Position = 0x4;
+                ushort def_dat_size = batm_read.ReadUInt16();
+                ushort unk = batm_read.ReadUInt16();
+                ushort element_offset = batm_read.ReadUInt16();
+                ushort num_elements = batm_read.ReadUInt16();
+                ushort unk2 = batm_read.ReadByte();
+                ushort stage_flags = batm_read.ReadByte();
+
+                batm_read.BaseStream.Position += 0x2; //unknown data
+
+                Console.WriteLine("pos 0x{0:X}",batm_read.BaseStream.Position);
+
+                int aprox = def_dat_size / 4;
+
+
+                int now_pos = (int)batm_read.BaseStream.Position;
+
+                //slurp the actual tile definitions
+                while( (batm_read.BaseStream.Position - now_pos) < def_dat_size )
+                {
+                    batm_tile_def add_tile = new batm_tile_def();
+
+                    add_tile.x = batm_read.ReadByte();
+                    add_tile.y = batm_read.ReadByte();
+                    add_tile.use_tex = batm_read.ReadByte();
+                    add_tile.flags = batm_read.ReadByte();
+
+                    tile_list.Add(add_tile);
+                }
+
+                Console.WriteLine("finished def slurp at 0x{0:X}",batm_read.BaseStream.Position);
+
+                Color bg_color = new Color();
+                bg_color.r = batm_read.ReadByte();
+                bg_color.g = batm_read.ReadByte();
+                bg_color.b = batm_read.ReadByte();
+
+                batm_read.BaseStream.Position += 0x3; //unknown data
+
+                Color floor_shade_color = new Color();
+                floor_shade_color.r = batm_read.ReadByte();
+                floor_shade_color.g = batm_read.ReadByte();
+                floor_shade_color.b = batm_read.ReadByte();
+                floor_shade_color.a = batm_read.ReadByte(); //actually unk but whatever
+
+                int floor_shade_1 = batm_read.ReadByte();
+                int floor_shade_2 = batm_read.ReadByte();
+
+                //loop actual stage elements
+                for (int h = 0; h < num_elements; h++)
+                {
+                    Console.WriteLine("start ele "+h+ " at 0x{0:X}",batm_read.BaseStream.Position);
+
+                    batm_element stage_element = new batm_element();
+                    stage_element.x = batm_read.ReadSByte();
+                    stage_element.y = batm_read.ReadSByte();
+                    stage_element.z = batm_read.ReadSByte();
+                    stage_element.orient_byte = batm_read.ReadByte();
+                    stage_element.num_tiles_x = batm_read.ReadByte();
+                    stage_element.num_tiles_y = batm_read.ReadByte();
+                    stage_element.scale = batm_read.ReadByte();
+                    stage_element.unk1 = batm_read.ReadByte();
+                    stage_element.draw_type = batm_read.ReadByte();
+                    stage_element.unk2 = batm_read.ReadByte();
+                    stage_element.unk3 = batm_read.ReadInt16();
+
+                    int total_tiles = stage_element.num_tiles_x * stage_element.num_tiles_y;
+                    stage_element.tile_array = new int[total_tiles];
+
+                    Console.WriteLine("start array at 0x{0:X}", batm_read.BaseStream.Position);
+
+                    for (int c = 0; c < total_tiles; c++)
+                    {
+                        stage_element.tile_array[c] = batm_read.ReadByte();
+                    }
+
+                    element_list.Add(stage_element);
+
+                    Console.WriteLine("end ele "+h+ " at 0x{0:X}", batm_read.BaseStream.Position);
+                }
+
+                Console.WriteLine("finished BATM data read");
+            }
+
+
+            int e_cnt = 0;
+            foreach(batm_element element in element_list)
+            {
+                var info = new SKImageInfo(element.num_tiles_x*64, element.num_tiles_y*64);
+                int off_x = (info.Width);
+                int off_y = (info.Height);
+
+
+                int tile_c = 0;
+                List<SKBitmap> bitmp_list = new List<SKBitmap>();
+                using (var surface = SKSurface.Create(info))
+                {
+                    SKCanvas canvas = surface.Canvas;
+                    if (gDoAttemptIndexed) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+
+                    for (int v = 0; v < element.num_tiles_y; v++)
+                    {
+                        for (int g = 0; g < element.num_tiles_x; g++, tile_c++)
+                        {
+                            int c_tile = element.tile_array[tile_c];
+                            batm_tile_def c_tile_def = tile_list[c_tile];
+                            int use_sheet = c_tile_def.use_tex;
+
+                            SKBitmap in_sheet = new SKBitmap();
+                            SKBitmap out_part = new SKBitmap();
+
+
+                            var gcHandle = GCHandle.Alloc(in_tm2.texture_sheets[use_sheet].pixel_data, GCHandleType.Pinned);
+                            // install the pixels with the color type of the pixel data
+                            var img_info = new SKImageInfo(in_tm2.texture_sheets[use_sheet].width, in_tm2.texture_sheets[use_sheet].height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+                            in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+
+
+                            if (!in_sheet.ExtractSubset(out_part, new SKRectI(c_tile_def.x, c_tile_def.y, c_tile_def.x+64, c_tile_def.y+64)))
+                            {
+                                Console.WriteLine("failed to grab subset: x " + c_tile_def.x + " y " + c_tile_def.y);
+                                System.Environment.Exit(0);
+                            }
+
+                            byte[] opb = out_part.Bytes;
+                            for (int p = 0; p < out_part.ByteCount; p += 4)
+                            {
+                                byte px_clr_r = opb[p];
+                                int use_al = (in_tm2.palette_sheets[c_tile_def.use_tex].pixel_data[(px_clr_r * 4) + 3] * 2 > 255) ? 255 : in_tm2.palette_sheets[c_tile_def.use_tex].pixel_data[(px_clr_r * 4) + 3] * 2;
+
+                                if (gDoAttemptIndexed)
+                                {
+                                    //px_clr_r += (byte)(0x10 * chunk.use_palette);
+                                    opb[p + 0] = px_clr_r;
+                                    opb[p + 1] = px_clr_r;
+                                    opb[p + 2] = px_clr_r;
+                                }
+                                else
+                                {
+                                    opb[p + 0] = in_tm2.palette_sheets[c_tile_def.use_tex].pixel_data[(px_clr_r * 4) + 0];
+                                    opb[p + 1] = in_tm2.palette_sheets[c_tile_def.use_tex].pixel_data[(px_clr_r * 4) + 1];
+                                    opb[p + 2] = in_tm2.palette_sheets[c_tile_def.use_tex].pixel_data[(px_clr_r * 4) + 2];
+                                }
+
+
+                                opb[p + 3] = (byte)use_al;
+                            }
+
+                            var partgcHandle = GCHandle.Alloc(opb, GCHandleType.Pinned);
+                            out_part.InstallPixels(out_part.Info, partgcHandle.AddrOfPinnedObject(), out_part.RowBytes, delegate { partgcHandle.Free(); }, null);
+
+                            if (save_parts)
+                            {
+                                if (gDoAttemptIndexed)
+                                {
+                                    //byte[] use_pal = (in_palette_path != "") ? in_palette : consolidated_pal;
+                                    byte[] use_pal = in_tm2.palette_sheets[0].pixel_data;
+                                    SKImage.FromBitmap(out_part).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_spr_" + e_cnt + "_part_" + g + ".png"), use_pal);
+                                }
+                                else
+                                {
+                                    //Console.WriteLine("svpart " + b);
+                                    using (var data = out_part.Encode(SKEncodedImageFormat.Png, 100))
+                                    using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_spr_" + e_cnt + "_part_" + g + ".png")))
+                                    {
+                                        // save the data to a stream
+                                        data.SaveTo(stream);
+                                    }
+                                }
+                            }
+                            
+                            SKPaint part_paint = new SKPaint();
+
+                            // Blend modes are destructive to grayscale palettization
+                            if (!gDoAttemptIndexed)
+                            {
+
+                            }
+
+                            canvas.Save();
+                            //canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+
+
+                            //Console.WriteLine("cx " + chunk.x + " cy " + chunk.y);
+
+                            SKPoint canvas_trans = new SKPoint(g * 64, v * 64);
+
+                            switch (c_tile_def.flags & (BATM_flag_flip_x | BATM_flag_flip_y))
+                            {
+                                case BATM_flag_flip_x:
+                                    canvas.Scale(-1, 1, canvas_trans.X, canvas_trans.Y);
+                                    canvas.Translate(-64,0);
+                                    break;
+                                case BATM_flag_flip_y:
+                                    canvas.Scale(1, -1, canvas_trans.X, canvas_trans.Y);
+                                    canvas.Translate(0, -64);
+                                    break;
+                                case BATM_flag_flip_x | BATM_flag_flip_y:
+                                    canvas.Scale(-1, -1, canvas_trans.X, canvas_trans.Y);
+                                    canvas.Translate(-64, -64);
+                                    break;
+                            }
+
+                            canvas.Translate(canvas_trans.X, canvas_trans.Y);
+                            canvas.DrawBitmap(out_part, new SKRect(0, 0, 64, 64), part_paint);
+
+                            //canvas.DrawBitmap(in_sheet, new SKPoint(0, 0));
+                            canvas.Restore();
+
+                            in_sheet.Dispose();
+                            out_part.Dispose();
+
+                            //Console.WriteLine("part " + g + " sprite " + nm);
+                        }
+                    }
+
+
+                    //Console.WriteLine("begin save " + b);
+
+                    if (gDoAttemptIndexed)
+                    {
+                        //consolidated_pal
+                        //surface.Snapshot().SaveBitmap(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".bmp"), consolidated_pal);
+
+
+                        byte[] use_pal = in_tm2.palette_sheets[0].pixel_data;
+                        surface.Snapshot().CursedPng(Path.Combine(out_dir.FullName, fname + "_f_" + e_cnt + ".png"), use_pal);
+
+                    }
+                    else
+                    {
+                        using (var image = surface.Snapshot())
+                        using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                        using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_f_" + e_cnt + ".png")))
+                        {
+                            data.SaveTo(stream);
+                            //System.Environment.Exit(0);
+                        }
+                    }
+
+                }
+
+                e_cnt++;
+            }
+            
+        }
+
+
         // function is at 0x2071BAC in Hearts DS anime movie edition
         // this skips the lower nybble handling that function has
         // because apparently, those are reserved
@@ -2445,6 +2751,8 @@ namespace d2_spritecomp
 
 
                                 new_sheet.data_size = tm2.ReadUInt32() - 0x10;
+
+                                //Console.WriteLine("palette data size: "+ new_sheet.data_size);
 
                                 new_sheet.pixel_format = tm2.ReadByte();
                                 tm2.ReadBytes(3);
@@ -2686,6 +2994,8 @@ namespace d2_spritecomp
                     }
                 }
 
+
+                Console.WriteLine("tm2 loaded");
                 return out_file;
             }
         }
