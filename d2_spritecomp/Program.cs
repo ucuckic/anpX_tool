@@ -264,10 +264,18 @@ namespace d2_spritecomp
                     byte[] add_pal = new byte[256 * 4];
                     in_tm2.palette_sheets[i].pixel_data.CopyTo(add_pal, 0);
 
-                    if (i * 0x10 < 256)
+                    if ( in_tm2.palette_sheets[i].data_size <= 0x50)
                     {
-                        in_tm2.palette_sheets[i].pixel_data.CopyTo(consolidated_pal, i * 0x40);
+                        if (i * 0x10 < 256)
+                        {
+                            in_tm2.palette_sheets[i].pixel_data.CopyTo(consolidated_pal, i * 0x40);
+                        }
                     }
+                    else
+                    {
+                        consolidated_pal = in_tm2.palette_sheets[0].pixel_data;
+                    }
+
 
                 }
 
