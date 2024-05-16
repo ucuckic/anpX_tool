@@ -176,13 +176,6 @@ namespace d2_spritecomp
                 return;
             }
 
-            List<i_dat> idat_list = new List<i_dat>();
-
-            byte[] in_dat = File.ReadAllBytes(args[0]);
-            string anp_string = System.Text.Encoding.UTF8.GetString(in_dat,0,4);
-
-            og_in_path = args[0];
-
             //Image in_sheet = Image.FromFile(args[1]);
             //Bitmap out_img = new Bitmap(256,256);
 
@@ -240,9 +233,26 @@ namespace d2_spritecomp
                     case "-saveparts":
                         save_parts = true;
                         break;
+
+                    case "-manga":
+                        if (i + 1 < args.Length)
+                        {
+                            i++;
+                            texture_sheet_path = new DirectoryInfo(args[i]);
+                        }
+                        jump_fix(texture_sheet_path.FullName);
+                        Console.WriteLine("executed");
+                        return;
+                        break;
                 }
             }
 
+            List<i_dat> idat_list = new List<i_dat>();
+
+            byte[] in_dat = File.ReadAllBytes(args[0]);
+            string anp_string = System.Text.Encoding.UTF8.GetString(in_dat, 0, 4);
+
+            og_in_path = args[0];
 
             in_dir = new DirectoryInfo(og_in_path);
             using (MemoryStream chunk_dat_stream = new MemoryStream(in_dat))
@@ -291,6 +301,76 @@ namespace d2_spritecomp
                 }
             }
             
+        }
+
+        static void jump_fix(string in_path)
+        {
+            SKBitmap manga_page = SKBitmap.Decode(in_path);
+
+            var info = new SKImageInfo(manga_page.Width, manga_page.Height);
+            using (var surface = SKSurface.Create(info))
+            {
+                SKCanvas canvas = surface.Canvas;
+
+                //draw scrambled
+                canvas.DrawBitmap(manga_page, new SKPoint(0, 0) );
+
+                int x_canvas = 0;
+                int y_canvas = 0;
+
+                while(x_canvas + 32 <= manga_page.Width)
+                {
+                    x_canvas += 32;
+                }
+                while (y_canvas + 32 <= manga_page.Height)
+                {
+                    y_canvas += 32;
+                }
+
+                Console.WriteLine("ycan "+y_canvas+" height "+manga_page.Height);
+
+                int c_width = x_canvas / 4;
+                int c_height = y_canvas / 4;
+
+                for (int i = 0; i < 4; i++)
+                {
+                    for (int b = 0; b < 4; b++)
+                    {
+                        SKRectI subset_rect = new SKRectI(c_width * i, c_height * b, c_width + (c_width * i), c_height + (c_height * b));
+                        SKBitmap subset_map = new SKBitmap();
+
+                        manga_page.ExtractSubset(subset_map, subset_rect);
+
+                        SKImage pImage = SKImage.FromBitmap(subset_map);
+
+                        /*
+                        using (var data = pImage.Encode(SKEncodedImageFormat.Png, 100))
+                        using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, "chunk_test_" + i + "_" + b + ".png")))
+                        {
+                            data.SaveTo(stream);
+                            //System.Environment.Exit(0);
+                        }
+                        */
+
+                        canvas.DrawBitmap(subset_map, new SKPoint(b * c_width, i * c_height));
+
+                        //Console.WriteLine("");
+                    }
+                }
+
+                //canvas.Save();
+
+                string fname = texture_sheet_path.Name.Substring(0, texture_sheet_path.Name.Length - texture_sheet_path.Extension.Length);
+
+                using (var image = surface.Snapshot())
+                using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname+".png")))
+                {
+                    data.SaveTo(stream);
+                    //System.Environment.Exit(0);
+                }
+
+            }
         }
 
         static void dump_tm2(string in_path)
@@ -818,6 +898,7 @@ namespace d2_spritecomp
                 uint paldat_offset = anp3_file.ReadUInt32();
                 uint palette_count = anp3_file.ReadUInt16();
                 uint bpp = anp3_file.ReadUInt16();
+
                 uint unk_hed = anp3_file.ReadUInt16();
                 int col_1 = anp3_file.ReadInt16();
                 int col_2 = anp3_file.ReadInt16();
@@ -896,8 +977,11 @@ namespace d2_spritecomp
                     }
                 }
 
+                Console.WriteLine("palette count: "+palette_count);
 
                 anp3_file.BaseStream.Position = paldat_offset;
+
+                palettes_out_dir.Create();
                 for (int l = 0; l < palette_count; l++)
                 {
                     if (bpp == 8)
@@ -936,7 +1020,14 @@ namespace d2_spritecomp
                         }
 
 
-                        Console.WriteLine("fpr " + pals[l].Length);
+                        using (FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "test_chara_pal_" + l + ".pal")))
+                        {
+                            writecolor.Write(lazy_mspal_header);
+                            writecolor.Write(pals[l]);
+                        }
+
+
+                        Console.WriteLine("fpr " + palette_count);
 
                         //File.WriteAllBytes("outtestpal.bin",pals[l]);
 
@@ -955,6 +1046,8 @@ namespace d2_spritecomp
 
                         l++;
 
+                        //Console.WriteLine("4bpp?");
+
                         /*
                         byte[] pal_half_1 = anp3_file.ReadBytes(0x20);
                         anp3_file.BaseStream.Position += 0x20;
@@ -972,17 +1065,29 @@ namespace d2_spritecomp
 
                 if (gDoAttemptIndexed)
                 {
-                    palettes_out_dir.Create();
+                    
                     //File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_weapon_pal_" + weapon_equip + ".bin"), weapon_pals_list[weapon_equip].SelectMany(x => x).ToArray());
                     if (bpp == 4)
                     {
-                        File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal" + ".bin"), pals.SelectMany(x => x).ToArray());
+                        //File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal" + ".bin"), pals.SelectMany(x => x).ToArray());
                         pals.SelectMany(x => x).ToArray().CopyTo(composite_palette, 0);
+
+                        using (FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal" + ".pal")))
+                        {
+                            writecolor.Write(lazy_mspal_header);
+                            writecolor.Write(pals.SelectMany(x => x).ToArray());
+                        }
                     }
                     else
                     {
-                        File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal" + ".bin"), pals[0]);
+                        //File.WriteAllBytes(Path.Combine(palettes_out_dir.FullName, "combined_chara_pal" + ".bin"), pals[0]);
                         pals[0].CopyTo(composite_palette, 0);
+
+                        using (FileStream writecolor = File.OpenWrite(Path.Combine(palettes_out_dir.FullName, "single_chara_pal" + ".pal")))
+                        {
+                            writecolor.Write(lazy_mspal_header);
+                            writecolor.Write(pals[0]);
+                        }
                     }
 
                     /*
@@ -1091,7 +1196,8 @@ namespace d2_spritecomp
 
                             Console.WriteLine("part flgs value " + part_flags);
 
-                            uint part_palette = anp3_file.ReadByte();
+                            //only the right nibble
+                            uint part_palette = (uint)( anp3_file.ReadByte() & 0x0F);
 
                             Console.WriteLine("load pal usevl: " + part_palette);
 
@@ -1206,7 +1312,6 @@ namespace d2_spritecomp
                                     byte[] use_palette = pals[part_palette];
                                     int pxval_offset = (sprite_part.use_palette) * 0x10;
 
-
                                     if (gDoAttemptIndexed)
                                     {
                                         int alpha = (use_palette[((pixel_value - pxval_offset) * 4) + 3] == 0) ? 0 : 0xff;
@@ -1273,14 +1378,30 @@ namespace d2_spritecomp
                                 for (int f = 0; f < pixel_data.Length; f++)
                                 {
 
-                                    byte[] use_palette = pals[part_palette];
+
+                                    //if (part_palette > 0) System.Environment.Exit(0);
+
+                                    if (part_palette > 0)
+                                    {
+                                        //Console.WriteLine("highly mysterious behaviour");
+                                    }
+
+                                    //byte[] use_palette = pals[part_palette]; //8bbp shouldnt have multiple palettes even though sometimes they do ??????
+                                    byte[] use_palette = pals[0];
                                     int pixel_value = pixel_data[f];
                                     int pxval_offset = (sprite_part.use_palette) * 0x10;
 
+                                    uint val = (uint)(((pixel_value - pxval_offset) * 4) + 3);
+
+                                    //Console.WriteLine("pixel value "+pixel_value);
+                                    //Console.WriteLine("pp val " + pxval_offset);
+                                    //Console.WriteLine("pcnt "+pals.Length+" cpal "+part_palette+" ");
 
                                     if (gDoAttemptIndexed)
                                     {
-                                        int alpha = (use_palette[((pixel_value - pxval_offset) * 4) + 3] == 0) ? 0 : 0xff;
+                                        //int alpha = (use_palette[((pixel_value - pxval_offset) * 4) + 3] == 0) ? 0 : 0xff;
+                                        int alpha = (use_palette[((pixel_value) * 4) + 3] == 0) ? 0 : 0xff;
+                                        //int alpha = (use_palette[((pixel_value - pxval_offset) * 4) + 3] == 0) ? 0 : 0xff;
 
                                         colored_pixel_data[(f * 4) + 0] = (byte)pixel_value;
                                         colored_pixel_data[(f * 4) + 1] = (byte)pixel_value;
@@ -2440,6 +2561,11 @@ namespace d2_spritecomp
 
                 int floor_shade_1 = batm_read.ReadByte();
                 int floor_shade_2 = batm_read.ReadByte();
+
+                //this SHOULD be the end of the section, but it may be able to be bigger
+                //instead of just assuming, go ahead and jump to the element start position from the header
+
+                batm_read.BaseStream.Position = element_offset;
 
                 //loop actual stage elements
                 for (int h = 0; h < num_elements; h++)
