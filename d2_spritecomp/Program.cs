@@ -75,6 +75,33 @@ namespace d2_spritecomp
             }
         }
 
+        struct anp3_col
+        {
+            public short sx;
+            public short sy;
+            public short ex;
+            public short ey;
+        }
+
+        struct anp2_anim_def
+        {
+            public byte flags; //animation flags
+            public ushort offset; //data offset to frame array
+            public anp2_anim_frame[] frames; //frame array
+            public byte framecount
+            {
+                get { return (byte)frames.Length; }
+            }
+
+            
+        }
+
+        struct anp2_anim_frame
+        {
+            public byte sprite; //graphic to use
+            public byte duration; //duration of sequence
+        }
+
         struct batm_tile_def
         {
             //mostly universal
@@ -146,6 +173,8 @@ namespace d2_spritecomp
             public byte a;
         }
 
+        public static bool draw_collisions = false;
+
         public static bool exclude_char = false;
         public static bool exclude_wep = false;
 
@@ -187,6 +216,9 @@ namespace d2_spritecomp
                 var c_arg = args[i];
                 switch(c_arg)
                 {
+                    case "-drawcollision":
+                        draw_collisions = true;
+                        break;
                     case "-nochar":
                         exclude_char = true;
                         break;
@@ -523,6 +555,53 @@ namespace d2_spritecomp
                 List<i_dat> idat_list = new List<i_dat>();
                 uint num_sprites = chunk_dat.ReadByte();
 
+                uint num_anim = chunk_dat.ReadByte(); //probably animation count
+                uint animation_table_offset = chunk_dat.ReadUInt16(); //maybe
+
+                //no reason to gather this information but just in case
+                anp2_anim_def[] animation_defs = new anp2_anim_def[num_anim];
+
+                Console.WriteLine("num ani: " + num_anim);
+                for (int h = 0; h < num_anim; h++)
+                {
+                    chunk_dat.BaseStream.Position = animation_table_offset + (h*4);
+                    Console.WriteLine("ani offset: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                    anp2_anim_def new_ani = new anp2_anim_def();
+                    new_ani.flags = chunk_dat.ReadByte();
+
+                    int frame_count = chunk_dat.ReadByte(); //not stored
+                    new_ani.frames = new anp2_anim_frame[frame_count];
+
+                    new_ani.offset = chunk_dat.ReadUInt16();
+
+                    for (int c = 0; c < frame_count; c++)
+                    {
+                        chunk_dat.BaseStream.Position = new_ani.offset;
+
+                        anp2_anim_frame new_fr = new anp2_anim_frame();
+                        new_fr.sprite = chunk_dat.ReadByte();
+                        new_fr.duration = chunk_dat.ReadByte();
+
+                        new_ani.frames[c] = new_fr;
+                    }
+
+                    animation_defs[h] = new_ani;
+
+                }
+
+                chunk_dat.BaseStream.Position = 0x8;
+
+                anp3_col collision_box = new anp3_col();
+
+                
+
+                collision_box.sx = chunk_dat.ReadSByte(); //position of the collision wall
+                collision_box.sy = chunk_dat.ReadByte(); //unsigned - height starting from the ground
+                //collision_box.sy = chunk_dat.ReadSByte();
+                //collision_box.ex = chunk_dat.ReadSByte();
+                //collision_box.ey = chunk_dat.ReadSByte();
+
                 Console.WriteLine("num sprites: " + num_sprites);
                 //System.Environment.Exit(0);
 
@@ -539,9 +618,17 @@ namespace d2_spritecomp
 
                     int num_parts = chunk_dat.ReadByte();
 
-                    int unk = chunk_dat.ReadByte();
+                    //int unk = chunk_dat.ReadByte();
+                    //int unk2 = chunk_dat.ReadByte();
 
-                    int unk2 = chunk_dat.ReadInt16();
+                    uint num_collision_boxes = chunk_dat.ReadByte();
+                    uint num_attack_collision_boxes = chunk_dat.ReadByte();
+
+                    anp3_col[] frame_collisions = new anp3_col[num_collision_boxes];
+                    anp3_col[] frame_attack_collisions = new anp3_col[num_attack_collision_boxes];
+
+
+                    int unk3 = chunk_dat.ReadByte();
 
                     Console.WriteLine("pos before read: 0x{0:X}", chunk_dat.BaseStream.Position);
 
@@ -659,12 +746,66 @@ namespace d2_spritecomp
                         chunk_dat.BaseStream.Position = current_offset;
                     }
 
+
+                    //Console.WriteLine("idatoff: 0x{0:X}", image_data_offset);
+
+                    Console.WriteLine("return from part to: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                    if (draw_collisions)
+                    {
+                        // go on an adventure to gather collision data
+                        Console.WriteLine("confirmed " + num_collision_boxes + " collisions");
+                        Console.WriteLine("confirmed " + num_attack_collision_boxes + " atk collisions");
+                        Console.WriteLine("col tbl: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                        //anp3_file.BaseStream.Position = col_dat_offset;
+                        for (int c = 0; c < num_collision_boxes; c++)
+                        {
+                            long pre_col_off = chunk_dat.BaseStream.Position;
+
+                            ushort collision_offset = chunk_dat.ReadUInt16();
+                            chunk_dat.BaseStream.Position = collision_offset;
+                            Console.WriteLine("reading cols: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                            frame_collisions[c].sx = chunk_dat.ReadSByte();
+                            frame_collisions[c].sy = chunk_dat.ReadSByte();
+                            frame_collisions[c].ex = chunk_dat.ReadByte(); //length not ex
+                            frame_collisions[c].ey = chunk_dat.ReadByte(); //height not ey
+
+                            chunk_dat.BaseStream.Position = pre_col_off + 2;
+                        }
+
+                        Console.WriteLine("col tbl2: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                        for (int c = 0; c < num_attack_collision_boxes; c++)
+                        {
+                            long pre_col_off = chunk_dat.BaseStream.Position;
+
+                            ushort collision_offset = chunk_dat.ReadUInt16();
+                            chunk_dat.BaseStream.Position = collision_offset;
+                            Console.WriteLine("reading atkcols: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                            frame_attack_collisions[c].sx = chunk_dat.ReadSByte();
+                            frame_attack_collisions[c].sy = chunk_dat.ReadSByte();
+                            frame_attack_collisions[c].ex = chunk_dat.ReadByte(); //length not ex
+                            frame_attack_collisions[c].ey = chunk_dat.ReadByte(); //height not ey
+
+                            chunk_dat.BaseStream.Position = pre_col_off + 2;
+                        }
+                    }
+
                     out_dir.Create();
                     if (save_parts) part_out_dir.Create();
 
                     var info = new SKImageInfo(512, 512);
                     int off_x = info.Width / 2;
                     int off_y = (info.Height / 2);
+
+                    SKPoint canvas_trans = new SKPoint(off_x, off_y);
+                    SKPaint rect_paint = new SKPaint();
+                    rect_paint.Color = SKColors.White;
+                    rect_paint.Style = SKPaintStyle.Stroke;
+                    rect_paint.StrokeWidth = 1;
 
                     List<SKBitmap> bitmp_list = new List<SKBitmap>();
                     using (var surface = SKSurface.Create(info))
@@ -810,7 +951,7 @@ namespace d2_spritecomp
 
                             //SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
                             //SKPoint canvas_trans = new SKPoint(off_x - ((cut_width / 2)), off_y - ((cut_height / 2)));
-                            SKPoint canvas_trans = new SKPoint(off_x, off_y);
+
                             SKPoint chunk_center = new SKPoint(chunk.len_x / 2, chunk.len_y / 2);
 
                             canvas.Translate(canvas_trans.X, canvas_trans.Y);
@@ -851,11 +992,78 @@ namespace d2_spritecomp
                             //Console.WriteLine("part " + g + " sprite " + nm);
                         }
 
+
+
+                        if (draw_collisions)
+                        {
+                            canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                            canvas.Translate(canvas_trans.X, canvas_trans.Y);
+
+                            SKRect col_rect_1 = new SKRect(0, 0, collision_box.sx, collision_box.sy);
+
+                            int test_y = 80;
+
+                            //canvas.DrawLine(collision_box.sx, -collision_box.sy, collision_box.sx, 64, rect_paint);
+
+                            //rect_paint.Color = SKColors.Yellow;
+
+                            //canvas.DrawLine(0, 0, 32, 0, rect_paint);
+                            //canvas.DrawLine(0, 0, 0, -32, rect_paint);
+
+                            //rect_paint.Color = SKColors.Pink;
+                            //canvas.DrawLine(0, 64, 0, 0, rect_paint);
+
+                            //collision_box.sx = -16;
+
+                            //SKRect draw_rect = new SKRect(55, 64, collision_box.sx, -(collision_box.sy / 2));
+                            canvas.DrawRect(-collision_box.sx, 64, collision_box.sx*2, -(collision_box.sy / 2), rect_paint);
+
+                            //canvas.DrawRect(col_rect_1, rect_paint);
+
+                            rect_paint.Color = SKColors.Cyan;
+                            for (int c = 0; c < frame_collisions.Length; c++)
+                            {
+                                anp3_col use_col = frame_collisions[c];
+                                //SKRect draw_rect = new SKRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey);
+
+                                canvas.DrawRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey, rect_paint); //width and height, not right and bottom
+
+                                //Console.WriteLine("drew rect of dimensions: ");
+                                //Console.WriteLine("sx " + use_col.sx);
+                                //Console.WriteLine("sy " + use_col.sy);
+                                //Console.WriteLine("ex " + use_col.ex);
+                                //Console.WriteLine("ey " + use_col.ey);
+
+                                //canvas.DrawPoint(n_p, rect_paint);
+                                //canvas.DrawPoint(n_p2, rect_paint);
+                            }
+
+                            rect_paint.Color = SKColors.Red;
+                            for (int c = 0; c < frame_attack_collisions.Length; c++)
+                            {
+                                anp3_col use_col = frame_attack_collisions[c];
+                                //SKRect draw_rect = new SKRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey);
+
+                                canvas.DrawRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey, rect_paint);  //width and height, not right and bottom
+
+                                //Console.WriteLine("drew rect of dimensions: ");
+                                //Console.WriteLine("sx " + use_col.sx);
+                                //Console.WriteLine("sy " + use_col.sy);
+                                //Console.WriteLine("ex " + use_col.ex);
+                                //Console.WriteLine("ey " + use_col.ey);
+
+                                //canvas.DrawPoint(n_p, rect_paint);
+                                //canvas.DrawPoint(n_p2, rect_paint);
+                            }
+
+                            canvas.Restore();
+                        }
+
                         //Console.WriteLine("begin save " + b);
 
                         // save the data to a stream
 
-                        if(gDoAttemptIndexed)
+                        if (gDoAttemptIndexed)
                         {
                             //consolidated_pal
                             //surface.Snapshot().SaveBitmap(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".bmp"), consolidated_pal);
@@ -894,19 +1102,21 @@ namespace d2_spritecomp
                 uint num_animations = anp3_file.ReadUInt32();
 
 
-                uint imdat_offset = anp3_file.ReadUInt32();
+                //uint imdat_offset = anp3_file.ReadUInt32();
+                uint col_dat_offset = anp3_file.ReadUInt32();
                 uint paldat_offset = anp3_file.ReadUInt32();
                 uint palette_count = anp3_file.ReadUInt16();
                 uint bpp = anp3_file.ReadUInt16();
 
-                uint unk_hed = anp3_file.ReadUInt16();
-                int col_1 = anp3_file.ReadInt16();
-                int col_2 = anp3_file.ReadInt16();
+                int unk1 = anp3_file.ReadUInt16();
+                int unk2 = anp3_file.ReadInt16();
 
-                int col_3_sx = anp3_file.ReadInt16();
-                int col_4_sy = anp3_file.ReadInt16();
-                int col_5_ex = anp3_file.ReadInt16();
-                int col_6_ey = anp3_file.ReadInt16();
+                int col_1_sx = anp3_file.ReadInt16();
+                int col_1_sy = anp3_file.ReadInt16();
+                int col_1_ex = anp3_file.ReadInt16();
+                int col_1_ey = anp3_file.ReadInt16();
+
+                int unk3 = anp3_file.ReadInt16();
 
 
                 byte[][] pals = new byte[palette_count][];
@@ -1151,7 +1361,9 @@ namespace d2_spritecomp
                     anim_offs[a] = c_ani_offset;
 
                     //unk
-                    anp3_file.BaseStream.Position += 2;
+                    //anp3_file.BaseStream.Position += 2;
+
+                    uint ani_cancel_timing_rel = anp3_file.ReadUInt16();
 
 
 
@@ -1159,6 +1371,8 @@ namespace d2_spritecomp
 
                     for (int b = 0; b < c_ani_frame_count; b++)
                     {
+                        
+
                         uint last_pos_anim = (uint)anp3_file.BaseStream.Position;
 
                         uint frame_offset = anp3_file.ReadUInt32();
@@ -1167,12 +1381,21 @@ namespace d2_spritecomp
 
                         uint frame_duration = anp3_file.ReadUInt32();
 
+                        Console.WriteLine("framedur: 0x{0:X}", frame_duration);
+
                         anp3_file.BaseStream.Position = frame_offset;
                         uint num_sprite_parts = anp3_file.ReadByte();
-                        uint unk = anp3_file.ReadByte();
+                        uint num_collision_boxes = anp3_file.ReadByte();
+                        uint num_attack_collision_boxes = anp3_file.ReadByte();
+
+                        anp3_col[] frame_collisions = new anp3_col[num_collision_boxes];
+                        anp3_col[] frame_attack_collisions = new anp3_col[num_attack_collision_boxes];
+
+
+                        //anp3_file.BaseStream.Position = frame_offset; //return to frame offset
 
                         //unk
-                        anp3_file.BaseStream.Position += 2;
+                        anp3_file.BaseStream.Position += 1;
 
                         Console.WriteLine("confirmed " + num_sprite_parts + " parts");
 
@@ -1436,12 +1659,56 @@ namespace d2_spritecomp
 
                             //Console.WriteLine("idatoff: 0x{0:X}", image_data_offset);
 
+                            Console.WriteLine("return from: 0x{0:X}", anp3_file.BaseStream.Position);
+
                             anp3_file.BaseStream.Position = last_pos_part + come_out_offset;
                             Console.WriteLine("return from part to: 0x{0:X}", anp3_file.BaseStream.Position);
 
                             idat_list.Add(sprite_part);
                         }
 
+                        if(draw_collisions)
+                        {
+                            // go on an adventure to gather collision data
+                            Console.WriteLine("confirmed " + num_collision_boxes + " collisions");
+                            Console.WriteLine("confirmed " + num_attack_collision_boxes + " atk collisions");
+                            Console.WriteLine("col tbl: 0x{0:X}", anp3_file.BaseStream.Position);
+
+                            //anp3_file.BaseStream.Position = col_dat_offset;
+                            for (int c = 0; c < num_collision_boxes; c++)
+                            {
+                                long pre_col_off = anp3_file.BaseStream.Position;
+
+                                short collision_index = anp3_file.ReadInt16();
+                                anp3_file.BaseStream.Position = col_dat_offset + (collision_index * 8);
+                                Console.WriteLine("reading cols: 0x{0:X}", anp3_file.BaseStream.Position);
+
+                                frame_collisions[c].sx = anp3_file.ReadInt16();
+                                frame_collisions[c].sy = anp3_file.ReadInt16();
+                                frame_collisions[c].ex = anp3_file.ReadInt16();
+                                frame_collisions[c].ey = anp3_file.ReadInt16();
+
+                                anp3_file.BaseStream.Position = pre_col_off + 2;
+                            }
+
+                            Console.WriteLine("col tbl2: 0x{0:X}", anp3_file.BaseStream.Position);
+
+                            for (int c = 0; c < num_attack_collision_boxes; c++)
+                            {
+                                long pre_col_off = anp3_file.BaseStream.Position;
+
+                                short collision_index = anp3_file.ReadInt16();
+                                anp3_file.BaseStream.Position = col_dat_offset + (collision_index * 8);
+                                Console.WriteLine("reading atkcols: 0x{0:X}", anp3_file.BaseStream.Position);
+
+                                frame_attack_collisions[c].sx = anp3_file.ReadInt16();
+                                frame_attack_collisions[c].sy = anp3_file.ReadInt16();
+                                frame_attack_collisions[c].ex = anp3_file.ReadInt16();
+                                frame_attack_collisions[c].ey = anp3_file.ReadInt16();
+
+                                anp3_file.BaseStream.Position = pre_col_off + 2;
+                            }
+                        }
 
                         out_dir.Create();
                         if (save_parts) part_out_dir.Create();
@@ -1450,11 +1717,19 @@ namespace d2_spritecomp
                         int off_x = info.Width / 2;
                         int off_y = (info.Height / 2 + 128);
 
+                        SKPoint canvas_trans = new SKPoint(off_x, off_y);
+
                         idat_list.Reverse();
 
                         List<SKBitmap> bitmp_list = new List<SKBitmap>();
                         using (var surface = SKSurface.Create(info))
                         {
+
+                            SKPaint rect_paint = new SKPaint();
+                            rect_paint.Color = SKColors.White;
+                            rect_paint.Style = SKPaintStyle.Stroke;
+                            rect_paint.StrokeWidth = 1;
+
                             SKCanvas canvas = surface.Canvas;
                             if (gDoAttemptIndexed) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
 
@@ -1506,7 +1781,7 @@ namespace d2_spritecomp
 
                                 //SKPoint canvas_trans = new SKPoint((chunk.paste_x - (cut_width / 2)) + off_x, (chunk.paste_y - (cut_height / 2)) + off_y);
                                 //SKPoint canvas_trans = new SKPoint(off_x - ((cut_width / 2)), off_y - ((cut_height / 2)));
-                                SKPoint canvas_trans = new SKPoint(off_x, off_y);
+                                
                                 SKPoint chunk_center = new SKPoint(chunk.len_x / 2, chunk.len_y / 2);
 
                                 canvas.Translate(canvas_trans.X, canvas_trans.Y);
@@ -1532,9 +1807,62 @@ namespace d2_spritecomp
 
 
                                 canvas.DrawBitmap(part_image, new SKPoint(0, 0), part_paint);
-                                canvas.Restore();
 
+                                canvas.Restore();
                                 //Console.WriteLine("part " + g + " sprite " + nm);
+                            }
+
+
+                            //canvas.Restore();
+
+                            //canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                            //canvas.Translate(canvas_trans.X, canvas_trans.Y);
+
+                            if( draw_collisions )
+                            {
+                                canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                                canvas.Translate(canvas_trans.X, canvas_trans.Y);
+
+                                SKRect col_rect_1 = new SKRect(col_1_sx, col_1_sy, col_1_ex, col_1_ey);
+                                canvas.DrawRect(col_rect_1, rect_paint);
+
+                                rect_paint.Color = SKColors.Cyan;
+                                for (int c = 0; c < frame_collisions.Length; c++)
+                                {
+                                    anp3_col use_col = frame_collisions[c];
+                                    SKRect draw_rect = new SKRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey);
+
+                                    canvas.DrawRect(draw_rect, rect_paint);
+
+                                    //Console.WriteLine("drew rect of dimensions: ");
+                                    //Console.WriteLine("sx " + use_col.sx);
+                                    //Console.WriteLine("sy " + use_col.sy);
+                                    //Console.WriteLine("ex " + use_col.ex);
+                                    //Console.WriteLine("ey " + use_col.ey);
+
+                                    //canvas.DrawPoint(n_p, rect_paint);
+                                    //canvas.DrawPoint(n_p2, rect_paint);
+                                }
+
+                                rect_paint.Color = SKColors.Red;
+                                for (int c = 0; c < frame_attack_collisions.Length; c++)
+                                {
+                                    anp3_col use_col = frame_attack_collisions[c];
+                                    SKRect draw_rect = new SKRect(use_col.sx, use_col.sy, use_col.ex, use_col.ey);
+
+                                    canvas.DrawRect(draw_rect, rect_paint);
+
+                                    //Console.WriteLine("drew rect of dimensions: ");
+                                    //Console.WriteLine("sx " + use_col.sx);
+                                    //Console.WriteLine("sy " + use_col.sy);
+                                    //Console.WriteLine("ex " + use_col.ex);
+                                    //Console.WriteLine("ey " + use_col.ey);
+
+                                    //canvas.DrawPoint(n_p, rect_paint);
+                                    //canvas.DrawPoint(n_p2, rect_paint);
+                                }
+
+                                canvas.Restore();
                             }
 
                             //Console.WriteLine("begin save " + b);
