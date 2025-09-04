@@ -8,6 +8,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Xml.Linq;
+using FE3D.Image;
 using SkiaSharp;
 using static System.Net.Mime.MediaTypeNames;
 
@@ -191,6 +192,8 @@ namespace d2_spritecomp
         public static string og_in_path;
 
         public static DirectoryInfo texture_sheet_path;
+        public static List<DirectoryInfo> texture_sheet_paths = new List<DirectoryInfo>();
+
         public static DirectoryInfo in_dir;
         public static DirectoryInfo out_dir = new DirectoryInfo("out\\");
         public static DirectoryInfo part_out_dir = new DirectoryInfo(Path.Combine(out_dir.FullName, @"parts"));
@@ -248,7 +251,9 @@ namespace d2_spritecomp
                         if (i + 1 < args.Length)
                         {
                             i++;
-                            texture_sheet_path = new DirectoryInfo(args[i]);
+                            texture_sheet_path = new DirectoryInfo(args[i]);  //really need to remove this now
+
+                            texture_sheet_paths.Add(new DirectoryInfo(args[i]));
                         }
                         break;
                     case "-tryindex":
@@ -282,6 +287,10 @@ namespace d2_spritecomp
             List<i_dat> idat_list = new List<i_dat>();
 
             byte[] in_dat = File.ReadAllBytes(args[0]);
+            //byte[] header_check_bytes = new byte[4];
+            int header_check_int = BitConverter.ToInt32(in_dat,0);
+            //Array.ConstrainedCopy(in_dat, 0, header_check_bytes, 0, 4);
+
             string anp_string = System.Text.Encoding.UTF8.GetString(in_dat, 0, 4);
 
             og_in_path = args[0];
@@ -328,7 +337,18 @@ namespace d2_spritecomp
                         batm_unpack(chunk_dat_stream, in_path);
                         break;
                     default:
-                        Console.WriteLine("anp header missing");
+                        //Console.WriteLine("anp header missing - checking alternative");
+
+                        Console.WriteLine("int "+header_check_int);
+                        switch (header_check_int)
+                        {
+                            case 0xBFCA715:
+                                sapk_unpack(chunk_dat_stream);
+                                break;
+                            default:
+                                Console.WriteLine("no supported format detected");
+                                break;
+                        }
                         return;
                 }
             }
@@ -1001,7 +1021,7 @@ namespace d2_spritecomp
 
                             SKRect col_rect_1 = new SKRect(0, 0, collision_box.sx, collision_box.sy);
 
-                            int test_y = 80;
+                            //int test_y = 80;
 
                             //canvas.DrawLine(collision_box.sx, -collision_box.sy, collision_box.sx, 64, rect_paint);
 
@@ -3149,6 +3169,406 @@ namespace d2_spritecomp
             Console.WriteLine("Decompressed until -> 0x{0:X}", file.BaseStream.Position);
             return data;
         }
+
+        struct sapk_sprite 
+        {
+            public ushort part_cnt = 0;
+            public short rect_x = 0;
+            public short rect_y = 0;
+            public short rect_x_off = 0;
+            public short rect_y_off = 0;
+            public short unk = 0;
+
+            public List<sapk_cut> tiles;
+
+            public sapk_sprite()
+            {
+                tiles = new List<sapk_cut>();
+            }
+        }
+        struct sapk_cut
+        {
+            public short sx;
+            public short sy;
+            public short ex;
+            public short ey;
+            public short offx; //maybe 2x
+            public short offy; //maybe 2x
+            public short srcimg;
+
+
+            public uint found_at_address;
+        }
+        static void sapk_unpack(MemoryStream in_file)
+        {
+            // 0 - png
+            int process_type = 0;
+
+            DirectoryInfo in_dir = new DirectoryInfo(og_in_path);
+            string fname = in_dir.Name.Substring(0, in_dir.Name.Length - in_dir.Extension.Length);
+
+            byte[][] pals = new byte[0][];
+            byte[] consolidated_pal = new byte[256 * 4];
+
+
+
+            using (BinaryReader chunk_dat = new BinaryReader(in_file))
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+                List<SKBitmap> img_list = new List<SKBitmap>();
+
+                chunk_dat.BaseStream.Position = 0x8;
+                uint ctpk_offset = chunk_dat.ReadUInt32();
+                CTPK ctpk = new CTPK();
+
+                chunk_dat.BaseStream.Position = ctpk_offset;
+                byte[] ctpk_bytes = chunk_dat.ReadBytes( (int)(in_file.Length-ctpk_offset) );
+                //File.WriteAllBytes("out/test.bin", ctpk_bytes);
+
+                using (MemoryStream ctpk_memory_stream = new MemoryStream(ctpk_bytes) )
+                {
+                    using (FE3D.GovanifY.BinaryStream bs = new FE3D.GovanifY.BinaryStream(ctpk_memory_stream))
+                    {
+                        ctpk.Read(bs);
+                    }
+                }
+                if(save_parts)
+                {
+                    part_out_dir.Create();
+                    for (int i = 0; i < ctpk.Textures.Count; i++)
+                    {
+                        using (SKBitmap in_sheet = new SKBitmap())
+                        {
+                            byte[] flip_data = ctpk.Textures[i];
+                            //Array.Reverse(flip_data);
+
+                            var gcHandle = GCHandle.Alloc(flip_data, GCHandleType.Pinned);
+
+                            // install the pixels with the color type of the pixel data
+                            var img_info = new SKImageInfo(ctpk.TextureData[i].Width, ctpk.TextureData[i].Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+                            in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+
+                            if (gDoAttemptIndexed)
+                            {
+                                //SKImage.FromBitmap(in_sheet).SaveBitmap(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".bmp"),consolidated_pal,true);
+                                SKImage.FromBitmap(in_sheet).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png"), consolidated_pal);
+                            }
+                            else
+                            {
+                                //Console.WriteLine("svpart " + b);
+                                using (var data = in_sheet.Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, fname + "_sheet_" + i + ".png")))
+                                {
+                                    // save the data to a stream
+                                    data.SaveTo(stream);
+                                }
+                            }
+                        }
+                    }
+
+                }
+
+                chunk_dat.BaseStream.Position = 0x20;
+                uint animation_count = chunk_dat.ReadUInt32();
+                uint[] animation_offsets = new uint[animation_count];
+                for (int i = 0; i < animation_count; i++)
+                {
+                    Console.WriteLine("acquiring animation offset " + i + ": 0x{0:X}", chunk_dat.BaseStream.Position);
+                    animation_offsets[i] = chunk_dat.ReadUInt32();
+
+                    
+                }
+
+                for (int b = 0; b < animation_count; b++)
+                {
+                    Console.WriteLine("begin animation: "+b+" at: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                    uint use_offset = animation_offsets[b];
+                    chunk_dat.BaseStream.Position = use_offset;
+
+                    Console.WriteLine("reading anim header at: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                    uint num_textures_or_characters_maybe = chunk_dat.ReadUInt16(); //is this the textures? or the number of active characters?
+                    uint num_frames = chunk_dat.ReadUInt16(); //how many frames long is the animation table
+
+                    uint unk = chunk_dat.ReadUInt32(); //not always zero
+
+                    uint unk_offset = chunk_dat.ReadUInt32(); //not always zero
+
+                    uint anim_tbl_off = chunk_dat.ReadUInt32();
+                    uint sprite_tbl_off = chunk_dat.ReadUInt32();
+                    uint parts_off = chunk_dat.ReadUInt32();
+
+                    uint num_sprites = (anim_tbl_off - sprite_tbl_off) /0xC; //help
+
+                    uint unk_off_1 = chunk_dat.ReadUInt32(); //often the next animation?
+                    uint unk_off_2 = chunk_dat.ReadUInt32(); //often the next animation?
+
+
+
+                    anp3_col collision_box = new anp3_col();
+
+                    
+
+                    List<sapk_sprite> sprite_data = new List<sapk_sprite>();
+
+                    Console.WriteLine("num sprites: " + num_sprites);
+                    //System.Environment.Exit(0);
+
+
+                    chunk_dat.BaseStream.Position = sprite_tbl_off;
+                    Console.WriteLine("at: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                    int processed_parts = 0;
+                    for (int h = 0; h < num_sprites; h++)
+                    {
+                        //struct size 0xC
+
+                        chunk_dat.BaseStream.Position = sprite_tbl_off + (h * 0xC);
+                        Console.WriteLine("acquiring sprite " + h + ": 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                        sapk_sprite new_sprite = new sapk_sprite();
+
+                        new_sprite.part_cnt = chunk_dat.ReadUInt16();
+                        new_sprite.unk = chunk_dat.ReadInt16(); //sprite chunk accumulation?
+                        new_sprite.rect_x = chunk_dat.ReadInt16();
+                        new_sprite.rect_y = chunk_dat.ReadInt16();
+                        new_sprite.rect_x_off = chunk_dat.ReadInt16();
+                        new_sprite.rect_y_off = chunk_dat.ReadInt16();
+
+                        Console.WriteLine("sprite acquired " + h + ": 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                        sprite_data.Add(new_sprite);
+
+                        chunk_dat.BaseStream.Position = parts_off + (processed_parts * 0x12);
+
+
+
+
+                        for (int i = 0; i < new_sprite.part_cnt; i++)
+                        {
+                            Console.WriteLine("processing part " + processed_parts + ": 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                            sapk_cut sprite_tile = new sapk_cut();
+
+                            sprite_tile.found_at_address = (uint)chunk_dat.BaseStream.Position; //debug use
+
+                            short unk1 = chunk_dat.ReadInt16();
+                            short unk2 = chunk_dat.ReadInt16();
+
+                            sprite_tile.sx = chunk_dat.ReadInt16();
+                            sprite_tile.sy = chunk_dat.ReadInt16();
+                            sprite_tile.ex = chunk_dat.ReadInt16();
+                            sprite_tile.ey = chunk_dat.ReadInt16();
+                            sprite_tile.offx = chunk_dat.ReadInt16();
+                            sprite_tile.offy = chunk_dat.ReadInt16();
+
+                            sprite_tile.srcimg = chunk_dat.ReadInt16();
+
+                            new_sprite.tiles.Add(sprite_tile);
+
+
+                            Console.WriteLine("processed " + processed_parts + ": 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                            processed_parts++;
+                        }
+
+
+                        //Console.WriteLine("idatoff: 0x{0:X}", image_data_offset);
+
+                        //Console.WriteLine("return from part to: 0x{0:X}", chunk_dat.BaseStream.Position);
+
+                        out_dir.Create();
+                        if (save_parts) part_out_dir.Create();
+
+                        var info = new SKImageInfo(512, 512);
+                        int off_x = info.Width / 2;
+                        int off_y = (info.Height / 2);
+
+                        SKPoint canvas_trans = new SKPoint(off_x, off_y);
+                        SKPaint rect_paint = new SKPaint();
+                        rect_paint.Color = SKColors.White;
+                        rect_paint.Style = SKPaintStyle.Stroke;
+                        rect_paint.StrokeWidth = 1;
+
+                        List<SKBitmap> bitmp_list = new List<SKBitmap>();
+                        using (var surface = SKSurface.Create(info))
+                        {
+                            SKCanvas canvas = surface.Canvas;
+                            if (gDoAttemptIndexed) canvas.DrawColor(SKColors.Black); //color 0 in grayscale color palette
+
+                            for (int g = 0; g < new_sprite.tiles.Count(); g++)
+                            {
+                                sapk_cut chunk = new_sprite.tiles[g];
+
+                                SKBitmap in_sheet = new SKBitmap(ctpk.TextureData[chunk.srcimg].Width, ctpk.TextureData[chunk.srcimg].Height);
+                                SKBitmap out_part = new SKBitmap();
+
+                                SKRectI use_rect = new SKRectI(chunk.sx, chunk.sy, chunk.ex, chunk.ey);
+                                byte swap_flags = 0;
+
+
+
+                                if (chunk.sx > in_sheet.Width) continue;
+                                if (chunk.ex > in_sheet.Width) continue;
+                                if (chunk.sy > in_sheet.Height) continue;
+                                if (chunk.ey > in_sheet.Height) continue;
+
+
+
+                                if (chunk.sx > chunk.ex) //axis swap for backwards rectangle
+                                {
+                                    use_rect.Left = chunk.ex;
+                                    use_rect.Right = chunk.sx;
+
+                                    swap_flags |= 1;
+                                }
+
+
+                                if (chunk.sy > chunk.ey) //axis swap for backwards rectangle
+                                {
+                                    use_rect.Top = chunk.ey;
+                                    use_rect.Bottom = chunk.sy;
+
+                                    swap_flags |= 2;
+                                }
+
+                                if (process_type == 0)
+                                {
+                                    if(chunk.srcimg > ctpk.Textures.Count)
+                                    {
+                                        Console.WriteLine("missing texture for index: "+ chunk.srcimg+" skipping");
+                                        continue;
+                                    }
+
+                                    var gcHandle = GCHandle.Alloc(ctpk.Textures[chunk.srcimg], GCHandleType.Pinned);
+
+                                    var use_color_type = SKColorType.Bgra8888;
+                                    switch(ctpk.TextureData[chunk.srcimg].Format)
+                                    {
+                                        case CTPKFormat.Rgba8:
+                                            use_color_type = SKColorType.Bgra8888;
+                                            break;
+                                        case CTPKFormat.Rgb565:
+                                            use_color_type = SKColorType.Rgb565;
+                                            break;
+                                        default:
+                                            use_color_type = SKColorType.Bgra8888;
+                                            break;
+                                    }
+
+                                    Console.WriteLine("decode insheet " + chunk.srcimg);
+
+                                    // install the pixels with the color type of the pixel data
+                                    var img_info = new SKImageInfo(ctpk.TextureData[chunk.srcimg].Width, ctpk.TextureData[chunk.srcimg].Height, use_color_type, SKAlphaType.Unpremul);
+                                    in_sheet.InstallPixels(img_info, gcHandle.AddrOfPinnedObject(), img_info.RowBytes, delegate { gcHandle.Free(); }, null);
+                                }
+
+                                if (!in_sheet.ExtractSubset(out_part, use_rect))
+                                {
+                                    Console.WriteLine("failed to grab subset: sx " + chunk.sx + " sy " + chunk.sy + " ex " + chunk.ex + " ey " + chunk.ey);
+                                    Console.WriteLine("chunk was found at:  0x{0:X}", chunk.found_at_address);
+                                    System.Environment.Exit(0);
+
+                                    //continue;
+                                }
+
+                                if (save_parts)
+                                {
+                                    if (gDoAttemptIndexed)
+                                    {
+                                        byte[] use_pal = (in_palette_path != "") ? in_palette : consolidated_pal;
+                                        SKImage.FromBitmap(out_part).CursedPng(Path.Combine(part_out_dir.FullName, fname + "_a_" + b + "_spr_" + h + "_part_" + g + ".png"), use_pal);
+                                    }
+                                    else
+                                    {
+                                        string use_name = (swap_flags > 0) ? fname + "_a_" + b + "_spr_" + h + "_part_" + g +"_corrected"+".png" : fname + "_a_" + b + "_spr_" + h + "_part_" + g + ".png"; ;
+
+
+                                        //Console.WriteLine("svpart " + b);
+                                        using (var data = out_part.Encode(SKEncodedImageFormat.Png, 100))
+                                        using (var stream = File.OpenWrite(Path.Combine(part_out_dir.FullName, use_name)))
+                                        {
+                                            // save the data to a stream
+                                            data.SaveTo(stream);
+                                        }
+                                    }
+
+
+                                }
+
+
+                                SKPaint part_paint = new SKPaint();
+
+                                canvas.Save();
+                                canvas.Scale(-2.0f, 2.0f, info.Width / 2, info.Height / 2);
+                                if ((swap_flags & 1) != 0)
+                                {
+                                    canvas.Scale(-1.0f, 1.0f, info.Width / 2, info.Height / 2);
+
+                                    chunk.offx *= -1;
+                                }
+
+                                if ((swap_flags & 2) != 0)
+                                {
+                                    canvas.Scale(1.0f, -1.0f, info.Width / 2, info.Height / 2);
+
+                                    chunk.offy *= -1;
+                                }
+
+                                
+
+                                canvas.Translate(canvas_trans.X, canvas_trans.Y);
+                                canvas.Translate(chunk.offx, chunk.offy);
+                                
+
+                                canvas.Translate(-use_rect.Width / 2, -use_rect.Height / 2);
+
+                                Console.WriteLine("cx " + use_rect.Width + " cy " + use_rect.Height);
+
+                                canvas.DrawBitmap(out_part, new SKRect(0, 0, use_rect.Width, use_rect.Height), part_paint);
+                                //canvas.DrawBitmap(in_sheet, new SKPoint(0, 0));
+                                canvas.Restore();
+
+                                in_sheet.Dispose();
+                                out_part.Dispose();
+
+                                //Console.WriteLine("part " + g + " sprite " + nm);
+                            }
+
+                            //Console.WriteLine("begin save " + b);
+
+                            // save the data to a stream
+
+                            if (gDoAttemptIndexed)
+                            {
+                                //consolidated_pal
+                                //surface.Snapshot().SaveBitmap(Path.Combine(out_dir.FullName, fname + "_f_" + h + ".bmp"), consolidated_pal);
+
+
+                                byte[] use_pal = (in_palette_path != "") ? in_palette : consolidated_pal;
+                                surface.Snapshot().CursedPng(Path.Combine(out_dir.FullName, fname + "_a_" + b + "_f_" + h + ".png"), use_pal);
+
+                            }
+                            else
+                            {
+                                using (var image = surface.Snapshot())
+                                using (var data = image.Encode(SKEncodedImageFormat.Png, 100))
+                                using (var stream = File.OpenWrite(Path.Combine(out_dir.FullName, fname + "_a_"+b+"_f_" + h + ".png")))
+                                {
+                                    data.SaveTo(stream);
+                                    //System.Environment.Exit(0);
+                                }
+                            }
+                        }
+                        //idat_list.Clear();
+                    }
+
+                }
+            }
+        }
+
 
         public struct tm2_sheet
         {

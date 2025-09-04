@@ -16,7 +16,23 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="SPICA\Formats\Generic\COLLADA\**" />
+    <Compile Remove="SPICA\Formats\Generic\StudioMdl\**" />
+    <Compile Remove="SPICA\Formats\Generic\WavefrontOBJ\**" />
+    <EmbeddedResource Remove="SPICA\Formats\Generic\COLLADA\**" />
+    <EmbeddedResource Remove="SPICA\Formats\Generic\StudioMdl\**" />
+    <EmbeddedResource Remove="SPICA\Formats\Generic\WavefrontOBJ\**" />
+    <None Remove="SPICA\Formats\Generic\COLLADA\**" />
+    <None Remove="SPICA\Formats\Generic\StudioMdl\**" />
+    <None Remove="SPICA\Formats\Generic\WavefrontOBJ\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="SkiaSharp" Version="2.88.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="SPICA\Formats\Generic\" />
   </ItemGroup>
 
 </Project>
