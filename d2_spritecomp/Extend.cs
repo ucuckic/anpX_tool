@@ -59,9 +59,19 @@ namespace d2_spritecomp
                             strwrite.Write(ihdr_crc);
 
                             long pos = stream.Position;
-                            strread.BaseStream.Position = pos;
+                            strread.BaseStream.Position = pos + 0xD;  //skip the shitty meme chunk;
 
                             byte[] img_buffer = strread.ReadBytes((int)strread.BaseStream.Length);
+
+                            /*
+                            using(MemoryStream fb = new MemoryStream(img_buffer))
+                            {
+                                using (BinaryWriter bfw = new BinaryWriter(fb))
+                                {
+                                    bfw.Write(32);
+                                }
+                            }
+                            */
 
                             //plte
                             byte[] plte_chunk = new byte[] { 0, 0, 3, 0, 0x50, 0x4C, 0x54, 0x45, };
